@@ -289,6 +289,11 @@ pointing at the same `server.py`) — local, offline, no hosting. The ChatGPT
 consumer app is deliberately not supported, because it only connects to remote
 URL servers and this one never goes on the network.
 
+`tests/test_any_client.py` is itself such a client: it knows nothing about
+Claude, speaks only the protocol over a pipe, and checks the handshake, the tool
+schemas, a real call, and that a bad call comes back as an error instead of a
+hang. It runs in CI, so "works with any MCP client" is measured, not claimed.
+
 Run `scripts\print-config.py` to print the block above with your real path
 filled in. Full walkthrough, GPT snippet included: **[docs/OTHER_CLIENTS.md](docs/OTHER_CLIENTS.md)**.
 

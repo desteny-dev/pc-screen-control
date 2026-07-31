@@ -2541,9 +2541,9 @@ def t_launch_app(args):
             subprocess.Popen(befehl, shell=True)     # explicit, user-approved
         elif os.path.exists(befehl):
             # The whole string is a real file or program, spaces and all - open
-            # it with its default handler. Checking this first means a path like
-            # C:\My Documents\report.pdf is not mistaken for a program plus
-            # arguments, without ever going through a shell.
+            # it with its default handler. Checking this first means a path with
+            # spaces in it (a documents folder, say) is not mistaken for a
+            # program plus arguments, without ever going through a shell.
             os.startfile(befehl)
         else:
             import shlex

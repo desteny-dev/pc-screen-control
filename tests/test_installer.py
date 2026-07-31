@@ -128,9 +128,12 @@ print("8 - install locations come from the environment, not from constants")
 source = open(SERVER, encoding="utf-8").read()
 check("install dir derived from LOCALAPPDATA", "LOCALAPPDATA" in source)
 check("config dir derived from APPDATA", "APPDATA" in source)
+# Both separators, always - not os.sep. Using the running platform's separator
+# meant a hard-coded C:\... slipped through every local run on Linux and only
+# turned CI red, which is the slowest possible way to find a one-line mistake.
+# A Windows path is wrong in this file whatever machine is reading it.
 check("no hard-coded install path",
-      not re.search(r"[A-Za-z]:" + re.escape(os.sep) + r"(?!Users.you)\w",
-                    source))
+      not re.search(r"[A-Za-z]:[\\/](?!Users.you)\w", source))
 
 print()
 print("-" * 68)
