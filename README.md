@@ -86,68 +86,52 @@ Start at the top, stop at the first rung that works.
 | **3** | `capture` | nothing, but tells you less |
 | **4** | `click` `drag` `send_keys` | **takes your mouse or keyboard** |
 
-Rungs 1–3 cover almost everything. A screenshot loop has no choice but to live
-on rung 4, every single time.
+Rungs 1–3 cover almost everything. A screenshot loop lives on rung 4 every time.
 
-**For a long job in one application, it can get out of your way entirely.**
-`claim_window` moves that window just past the edge of every monitor. It keeps
-running and stays fully operable by name — but you cannot see it, and you cannot
-click into it, because Windows will not let the mouse pointer leave the
-monitors. Measured on a two-monitor desk: monitors end at x=4920, the window
-parks at x=5120, and `SetCursorPos(5170)` lands at 4919. `release_window` puts it
-back to the pixel, and so does the exit handler — including after a crash, since
-the position is written to disk before the window moves. A window you cannot
-reach with the mouse is not a window anyone should be able to strand.
+**`claim_window` gets out of your way for a long job.** It parks the window just
+past every monitor's edge — still running, still operable by name, but you can't
+see or click it, because Windows won't let the pointer leave the monitors.
+*(Measured: monitors end at x=4920, window parks at x=5120, `SetCursorPos(5170)`
+lands at 4919.)* `release_window` and the exit handler put it back to the pixel —
+even after a crash, since the position is saved to disk before the window moves.
 
-**And it will not type into a window, or a field, you moved to.** A keystroke
-sent without a target goes wherever the keyboard focus happens to be, which is
-fine until you click somewhere between one call and the next — then the Enter
-meant for a form lands in your chat. Both the foreground window **and the
-focused control** are recorded after every call, so anything the server itself
-did is already accounted for; if either has moved by the time the next blind
-keystroke or coordinate click is attempted, that move came from outside, and the
-tool refuses and names what changed. The control matters as much as the window:
-clicking a different field in the window that is already in front changes
-nothing about which window is in front, and typing follows the focus.
+**It won't type into a window you moved to.** The foreground window *and the
+focused control* are recorded after every call. If either moved before the next
+blind keystroke or click, the move came from you — the tool refuses and names
+what changed. `force: true` overrides.
 
-**The order is: freeze, then look, then act.** Checking first and locking
-afterwards leaves a gap, and a click lands in a millisecond — a check that only
-works sometimes is worse than none, because it gets trusted. So input is held
-first, the screen is given 40 ms for the last keystroke to land, and only then
-is the target verified. If it moved, the lock is released again and nothing is
-typed. `force: true` overrides the whole thing.
+**Order: freeze, look, act.** Input is held first, the screen gets 40 ms for the
+last keystroke to land, then the target is verified. Checking before locking
+leaves a gap a click slips through.
 
-**A tool never steps down a rung quietly.** `invoke` on a control that
-publishes no way to be pressed does not fall back to a real click — it refuses,
-names what the element does offer, and hands you the exact `click(x, y)` call if
-you decide the pointer is worth it. Where a cheaper route exists inside a tool
-it is taken first: `close_window` asks the window to close itself and only
-reaches for Alt+F4 if it will not, `menu` tries the expand pattern, then the
-context-menu key, then the right button. Whenever one of them does step down, it
-says so in its reply — `"how"` names the route and `"took_input"` is `true`.
-That way the decision to spend your mouse is always made deliberately, one level
-up, and never inside a tool that advertised itself as free.
+**No tool steps down a rung silently.** `invoke` on an unpressable control
+refuses and hands you the exact `click(x, y)` — never a click behind your back.
+Cheaper routes inside a tool come first (`close_window` asks before Alt+F4;
+`menu` tries expand, then the menu key, then right-click), and any step-down is
+named in the reply (`"how"`, `"took_input": true`).
 
-**Rung 4 is the exception, not the habit.** It is reached only where an
-application paints its own interface and publishes no controls at all — editing
-canvases, video timelines, games.
+**Rung 4 is the exception** — only where an app paints its own interface:
+canvases, timelines, games.
 
-**And when it is reached while you are using the computer, Claude hands you a
-warning first.** The screen edge breathes slowly inward — your moment to finish
-what you were typing — then snaps back like a released rubber band, and that
-snap is the instant your input is held while Claude works. Your keystrokes pause;
-Claude's pass through. Escape aborts at any time. Afterwards your window, focus
-and text cursor are put back exactly where they were. If you are gaming or doing
-something that must not be interrupted, `set_guard priority:"me"` makes Claude
-wait for your go instead of ever taking over.
+**And it warns you first — on the screen, not in the chat.** The edge breathes
+**red** and deep — your moment to finish typing — then snaps back and fades to
+blue; that snap is when your input is held. A **Windows notification** says what
+Claude is doing, and how long if it will take a while (`~3 min`), because when
+you are working you are in another window, not reading a chat.
+
+**A burst is one interruption, not ten.** Everything Claude does in one go is a
+single held block; your window, focus, text cursor and mouse come back once, at
+the end. **Pause**, **Stop** and **Watch the work** sit in a tray icon and work
+even while your input is held. Escape is not an abort — a stray key can't cancel
+a task. `set_guard priority:"me"` makes Claude wait for your go and refuse
+rather than take over.
 
 <p align="center">
   <img src="docs/img/edge-glow.png" alt="The screen edge while input is taken" width="560">
 </p>
 
-Measured on a live desktop with ten windows open: `describe_screen` 3.4s,
-everything else between 0.07s and 0.86s, 60 calls in a row at 0.09s each.
-`tests/stress.py` reproduces these on your machine.
+Measured live, ten windows open: `describe_screen` 3.4s, everything else
+0.07–0.86s, 60 calls at 0.09s each. `tests/stress.py` reproduces it.
 
 ---
 
@@ -314,18 +298,17 @@ filled in. Full walkthrough, GPT snippet included: **[docs/OTHER_CLIENTS.md](doc
 
 ## Disclaimer
 
-**This software controls your computer.** It can press buttons, type, close
-windows and drag things, including in applications holding unsaved work.
+**This software controls your computer** — buttons, typing, closing windows,
+dragging, including in apps holding unsaved work.
 
-Provided **as is**, without warranty — see `LICENSE`. You are responsible for
-what you automate with it; test on something you can afford to lose. It collects
-no data and sends none: none of the 34 tools makes any outbound connection, and
-the server installs nothing when it starts — its libraries ship inside the
-package. Checking for a new version is a separate program you run by hand.
-Automating third-party software may conflict with that software's terms of use.
-[SECURITY.md](.github/SECURITY.md) has the threat model.
+**As is**, no warranty ([LICENSE](LICENSE)). You are responsible for what you
+automate; test on something you can afford to lose. It collects no data and sends
+none: none of the 34 tools makes an outbound connection, and the server installs
+nothing at startup — its libraries ship in the package; version checks are a
+separate program you run by hand. Automating third-party software may breach its
+terms. Threat model: [SECURITY.md](.github/SECURITY.md).
 
-Early software, written by one person in their spare time. No support
-obligation, no service level, no guarantee of maintenance.
+Early software, one person, spare time — no support, no SLA, no maintenance
+promise.
 
-MIT — see [LICENSE](LICENSE). © 2026 NATHAN Development.
+MIT — [LICENSE](LICENSE). © 2026 NATHAN Development.

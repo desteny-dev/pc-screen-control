@@ -8,8 +8,9 @@ Two jobs in one small always-on process:
      keyboard - and, on request, the rubber-band pulse that announces it is
      about to.
   2. The input guard itself: low-level hooks that swallow the user's keystrokes
-     and clicks while Claude works, let Claude's own (injected) input through,
-     and always let Escape through as an abort.
+     and clicks while Claude works, and let Claude's own (injected) input
+     through. Escape is no longer an abort - a stray Esc must not cancel the
+     assistant; pause and stop live in the tray icon.
 
 Why a separate process: hooks and a layered window both need a running message
 loop, and that loop must not share a thread with the protocol. If it dies, the
@@ -21,9 +22,9 @@ window is ~36 MB per frame and cannot be animated. Four thin bars are ~0.6 ms
 per frame (measured), so the pulse is smooth.
 
 Protocol, one word per line.
-  in  (stdin):  warn | lock | release | wait_on | wait_off | off | quit
-  out (stdout): abort   (user pressed Escape)
-                go      (user clicked the wait card)
+  in  (stdin):  warn | lock | keepalive | release | wait_on | wait_off | off | quit
+                notify|<text>   (show a Windows notification with this text)
+  out (stdout): go      (user clicked the wait card)
 """
 import ctypes
 import ctypes.wintypes as w
@@ -31,14 +32,32 @@ import sys
 import threading
 import time
 
-COLOUR = (34, 211, 238)       # cyan
+BLUE = (34, 211, 238)         # settled / idle glow
+RED = (239, 68, 68)           # active user: attention, a takeover is starting
 THICKNESS = 46                # resting inward reach, px
 PEAK_ALPHA = 165
 INHALE_MS = 900               # slow build inward
 EXHALE_MS = 180               # fast snap back - the "now" instant
 RELEASE_MS = 420              # gentle fade at the end
-MAX_DEPTH = 260               # how far inward the inhale stretches
+MAX_DEPTH = 260               # idle inhale reach
+MAX_DEPTH_WARN = 360          # active user: reach deeper - "stronger into the screen"
 WATCHDOG_MS = 10000           # hard auto-unlock
+
+# The current glow colour, mutated in place during the pulse. When the user is
+# active the warn breathes RED and reaches deeper, then fades RED -> BLUE as it
+# snaps to a hold; an idle takeover stays quietly BLUE.
+_FARBE = list(BLUE)
+
+
+def _mix(a, b, f):
+    f = max(0.0, min(1.0, f))
+    return (a[0] + (b[0] - a[0]) * f,
+            a[1] + (b[1] - a[1]) * f,
+            a[2] + (b[2] - a[2]) * f)
+
+
+def _set_farbe(rgb):
+    _FARBE[:] = [int(rgb[0]), int(rgb[1]), int(rgb[2])]
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
@@ -169,7 +188,7 @@ def _bar_pixels(breite, hoehe, seite, tiefe, staerke):
     screen edge and fades to nothing at depth 'tiefe'. 'staerke' scales the
     whole thing 0..1 for the fade in and out.
     """
-    r, g, b = COLOUR
+    r, g, b = _FARBE
     tiefe = max(1, int(tiefe))
 
     def farbe(d):
@@ -210,7 +229,7 @@ class Bar(object):
 
     def platzieren_und_zeichnen(self, tiefe, staerke):
         vx, vy, vw, vh = virtueller_bildschirm()
-        dick = max(1, int(min(tiefe, MAX_DEPTH)))
+        dick = max(1, int(min(tiefe, MAX_DEPTH_WARN)))
         if self.seite == "top":
             x, y, cx, cy = vx, vy, vw, dick
         elif self.seite == "bottom":
@@ -250,6 +269,163 @@ class Bar(object):
             user32.ShowWindow(self.hwnd, SW_SHOWNA if an else SW_HIDE)
 
 
+# ---------------------------------------------------------------------------
+# The Windows notification.
+#
+# A message in the chat is not a warning: when the user is working they are in
+# another window, not reading it. This is the on-screen half - a real Windows
+# notification, shown together with the edge pulse whenever the screen is taken
+# while the user is active, so it reaches them where their attention actually is.
+# It rides on a tray icon, which is also where pause/stop will live.
+shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+
+NIM_ADD, NIM_MODIFY, NIM_DELETE = 0, 1, 2
+NIF_MESSAGE, NIF_ICON, NIF_TIP, NIF_INFO = 0x01, 0x02, 0x04, 0x10
+NIIF_INFO = 0x01
+IDI_INFORMATION = 32516
+WM_TRAY = 0x8000 + 1        # WM_APP+1: tray callback (used by the menu later)
+
+
+class NOTIFYICONDATA(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", w.DWORD),
+        ("hWnd", w.HWND),
+        ("uID", ctypes.c_uint),
+        ("uFlags", ctypes.c_uint),
+        ("uCallbackMessage", ctypes.c_uint),
+        ("hIcon", w.HICON),
+        ("szTip", ctypes.c_wchar * 128),
+        ("dwState", w.DWORD),
+        ("dwStateMask", w.DWORD),
+        ("szInfo", ctypes.c_wchar * 256),
+        ("uVersion", ctypes.c_uint),
+        ("szInfoTitle", ctypes.c_wchar * 64),
+        ("dwInfoFlags", w.DWORD),
+        ("guidItem", ctypes.c_byte * 16),
+        ("hBalloonIcon", w.HICON),
+    ]
+
+
+_TRAY = {"nid": None, "da": False}
+
+
+def _tray_hinzufuegen(hwnd):
+    """Add the tray icon once. Balloons are shown on it; the menu comes later."""
+    if _TRAY["da"]:
+        return
+    try:
+        user32.LoadIconW.restype = w.HICON
+        icon = user32.LoadIconW(None, ctypes.c_void_p(IDI_INFORMATION))
+        nid = NOTIFYICONDATA()
+        nid.cbSize = ctypes.sizeof(NOTIFYICONDATA)
+        nid.hWnd = hwnd
+        nid.uID = 1
+        nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP
+        nid.uCallbackMessage = WM_TRAY
+        nid.hIcon = icon
+        nid.szTip = "PC Screen Control"
+        if shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid)):
+            _TRAY["nid"] = nid
+            _TRAY["da"] = True
+    except Exception:
+        pass
+
+
+def _tray_benachrichtigen(text):
+    """Show a Windows balloon - the notification that reaches the user even when
+    they are working in another window."""
+    nid = _TRAY["nid"]
+    if not nid:
+        return
+    try:
+        nid.uFlags = NIF_INFO
+        nid.szInfoTitle = "Claude needs the screen for a moment"
+        nid.szInfo = (text or "working")[:250]
+        nid.dwInfoFlags = NIIF_INFO
+        shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))
+    except Exception:
+        pass
+
+
+def _tray_entfernen():
+    nid = _TRAY["nid"]
+    if nid:
+        try:
+            shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(nid))
+        except Exception:
+            pass
+    _TRAY["nid"] = None
+    _TRAY["da"] = False
+
+
+# ---- tray menu: pause / stop, written to mode.json for the server ----------
+# Right-clicking the tray icon opens a tiny menu. Its choices are written to
+# mode.json, which the server reads before every action - so pause and stop
+# reach the assistant through a plain local file, no socket. This is also why a
+# takeover cannot lock the user out of the controls: the tray icon and its menu
+# are a normal window, not part of the swallowed input.
+WM_RBUTTONUP = 0x0205
+WM_CONTEXTMENU = 0x007B
+MF_STRING = 0x0000
+TPM_RIGHTBUTTON, TPM_RETURNCMD = 0x0002, 0x0100
+ID_PAUSE, ID_STOP, ID_VISIBLE = 1001, 1002, 1003
+
+_TRAY_STATE = {"pause": False, "stop": False, "visible": False}
+
+
+def _mode_schreiben():
+    """Write the controls to mode.json; the server reads it before acting."""
+    import json
+    import os
+    try:
+        pfad = os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                            "pc-screen-control", "mode.json")
+        os.makedirs(os.path.dirname(pfad), exist_ok=True)
+        with open(pfad, "w", encoding="utf-8") as fh:
+            json.dump(_TRAY_STATE, fh)
+    except Exception:
+        pass
+
+
+def _menu_zeigen(hwnd):
+    try:
+        menu = user32.CreatePopupMenu()
+        if not menu:
+            return
+        p = _TRAY_STATE
+        user32.AppendMenuW(menu, MF_STRING, ID_VISIBLE,
+                           "Work hidden" if p["visible"] else "Watch the work")
+        user32.AppendMenuW(menu, MF_STRING, ID_PAUSE,
+                           "Resume" if p["pause"] else "Pause")
+        user32.AppendMenuW(menu, MF_STRING, ID_STOP,
+                           "Let me work" if p["stop"] else "Stop")
+        pt = w.POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
+        user32.SetForegroundWindow(hwnd)     # so the menu closes on an outside click
+        cmd = user32.TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                                    pt.x, pt.y, 0, hwnd, None)
+        user32.DestroyMenu(menu)
+        if cmd == ID_PAUSE:
+            p["pause"] = not p["pause"]
+            _mode_schreiben()
+        elif cmd == ID_STOP:
+            p["stop"] = not p["stop"]
+            _mode_schreiben()
+        elif cmd == ID_VISIBLE:
+            p["visible"] = not p["visible"]
+            _mode_schreiben()
+    except Exception:
+        pass
+
+
+def _tray_wndproc(hwnd, msg, wparam, lparam):
+    if msg == WM_TRAY:
+        if (lparam & 0xFFFF) in (WM_RBUTTONUP, WM_CONTEXTMENU):
+            _menu_zeigen(hwnd)
+        return 0
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+
 class Guard(object):
     """The whole overlay: bars, animation, hooks, wait card."""
 
@@ -262,8 +438,7 @@ class Guard(object):
         self.m_hook = None
         self._kp = HOOKPROC(self._tasten)
         self._mp = HOOKPROC(self._maus)
-        self._wndproc = WNDPROC(lambda h, m, wp, lp:
-                                user32.DefWindowProcW(h, m, wp, lp))
+        self._wndproc = WNDPROC(_tray_wndproc)
         self.timer_hwnd = None
         self.thread_id = 0
 
@@ -276,10 +451,10 @@ class Guard(object):
             d = ctypes.cast(lparam,
                             ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
             eigen = bool(d.flags & LLKHF_INJECTED)
-            if not eigen and d.vkCode == VK_ESCAPE and \
-                    wparam in (WM_KEYDOWN, WM_SYSKEYDOWN):
-                _sende("abort")                    # Escape always aborts
-                return user32.CallNextHookEx(None, code, wparam, lparam)
+            # Escape is no longer special. A stray Esc must not cancel the
+            # assistant, so while input is held it is swallowed like any other
+            # real key; the assistant's own injected keys still pass. Pause and
+            # stop live in the tray icon, not on a keystroke.
             if self._gesperrt() and not eigen:
                 return 1                            # swallow real keystroke
         return user32.CallNextHookEx(None, code, wparam, lparam)
@@ -337,17 +512,21 @@ class Guard(object):
 
         if self.zustand == "warn":
             if t < INHALE_MS:
-                # deep, slow inhale: depth grows, easing out
+                # deep, slow inhale: RED and reaching deeper while the user is
+                # active - the "you are being interrupted" cue.
                 f = t / INHALE_MS
                 f = 1 - (1 - f) * (1 - f)
-                self._zeichne(THICKNESS + (MAX_DEPTH - THICKNESS) * f,
-                              0.35 + 0.35 * f)
+                _set_farbe(RED)
+                self._zeichne(THICKNESS + (MAX_DEPTH_WARN - THICKNESS) * f,
+                              0.40 + 0.45 * f)
             elif t < INHALE_MS + EXHALE_MS:
-                # fast exhale: snap back to a thin bright edge
+                # fast exhale: snap back, fading RED -> BLUE as it settles.
                 f = (t - INHALE_MS) / EXHALE_MS
-                self._zeichne(MAX_DEPTH - (MAX_DEPTH - THICKNESS) * f,
-                              0.7 + 0.3 * f)
+                _set_farbe(_mix(RED, BLUE, f))
+                self._zeichne(MAX_DEPTH_WARN - (MAX_DEPTH_WARN - THICKNESS) * f,
+                              0.85 + 0.15 * f)
             else:
+                _set_farbe(BLUE)
                 self._zustand("hold")
 
         elif self.zustand == "release":
@@ -359,9 +538,11 @@ class Guard(object):
                 self._zeichne(THICKNESS, 1.0 - f)
 
         elif self.zustand == "hold":
-            # steady; watchdog only
+            # steady; crash-watchdog only. If the server has gone silent - no
+            # keepalive - for this long it has likely died, so release rather
+            # than leave the user locked out. During real work the server's
+            # keepalive keeps resetting lock_seit, so a long block is safe.
             if (jetzt - self.lock_seit) * 1000.0 > WATCHDOG_MS:
-                _sende("abort")
                 self.release()
 
     def _zustand(self, neu):
@@ -375,14 +556,23 @@ class Guard(object):
 
     # ---- commands from the server ---------------------------------------
     def warn(self):
+        _set_farbe(RED)                 # active user: the pulse starts red
         self._alle_zeigen(True)
         self.start = time.time()
         self._zustand("warn")
 
     def lock(self):
-        """No announcement - user is idle. Straight to hold."""
+        """No announcement - user is idle. Straight to hold, quietly blue."""
+        _set_farbe(BLUE)
         self._alle_zeigen(True)
         self._zustand("hold")
+
+    def keepalive(self):
+        """The server is still working: reset the crash-watchdog so a long but
+        legitimate block is not force-released at the 10s mark. When the server
+        dies the keepalives stop and the watchdog fires as intended."""
+        if self.zustand == "hold":
+            self.lock_seit = time.time()
 
     def wait_on(self):
         self._alle_zeigen(True)
@@ -438,6 +628,7 @@ def main():
             raise ctypes.WinError(fehler)
     for b in guard.bars:
         b.erzeugen(hinst, klasse, guard._wndproc)
+    _tray_hinzufuegen(guard.bars[0].hwnd)     # tray icon hosts the notifications
 
     guard.thread_id = kernel32.GetCurrentThreadId()
     # a hidden helper window would be cleaner, but a thread timer is enough:
@@ -448,11 +639,17 @@ def main():
     def lesen():
         try:
             for zeile in sys.stdin:
-                b = zeile.strip().lower()
+                roh = zeile.rstrip("\r\n")
+                if roh.startswith("notify|"):
+                    _tray_benachrichtigen(roh[7:])   # the message text, as sent
+                    continue
+                b = roh.strip().lower()
                 if b == "warn":
                     guard.warn()
                 elif b == "lock":
                     guard.lock()
+                elif b == "keepalive":
+                    guard.keepalive()
                 elif b == "release":
                     guard.release()
                 elif b == "wait_on":
@@ -476,6 +673,7 @@ def main():
         user32.TranslateMessage(ctypes.byref(msg))
         user32.DispatchMessageW(ctypes.byref(msg))
     guard.off()
+    _tray_entfernen()
 
 
 if __name__ == "__main__":

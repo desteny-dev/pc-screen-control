@@ -20,21 +20,22 @@ used — works by installing `WH_KEYBOARD_LL` and `WH_MOUSE_LL` hooks. Those are
 system-wide, and they are the same mechanism a keylogger uses. Saying so plainly
 is more useful than hoping nobody notices, so:
 
-- **They exist only while an action is holding your input.** They are installed
-  when the lock closes and removed when it opens, not at startup and not between
-  calls.
-- **They live in `src/overlay.py`, a separate process** with no file access, no
-  network code and no connection to the server other than one pipe carrying the
-  words `warn`, `lock`, `release`, `wait_on`, `wait_off`, `off` and `quit`.
+- **They exist only while a takeover block holds your input** — installed when
+  it opens, removed when it ends, not at startup and not between calls.
+- **They live in `src/overlay.py`, a separate process** with no file access and
+  no network code, joined to the server by one pipe carrying only `warn`,
+  `lock`, `keepalive`, `release`, `wait_on`, `wait_off`, `off`, `quit`, and a
+  `notify` line for the on-screen message.
 - **Nothing is recorded.** The callbacks look at one field — whether Windows
-  marked the event as injected — and return either "swallow" or "pass on". No
-  key value is stored, logged, counted or sent. The whole hook path is about
-  forty lines; read them.
-- **Escape is never swallowed**, and a ten-second watchdog releases the hooks
-  even if something goes wrong. If the process dies, Windows removes them
-  automatically — measured at 0.1s after killing the parent outright.
-- **You can switch the whole thing off** with `set_guard enabled:false`, in
-  which case no hook is ever installed. Actions then run without pausing you.
+  marked the event as injected — and return "swallow" or "pass on". No key value
+  is stored, logged, counted or sent. The whole hook path is about forty lines.
+- **Escape is not special.** A stray Esc can't cancel a task; while your input is
+  held it is swallowed like any key. Pause and stop live in the tray icon. A
+  watchdog releases the hooks if the server goes silent for ten seconds — a crash
+  can never lock you out — and Windows removes them anyway if the process dies
+  (measured 0.1s after killing the parent).
+- **You can switch it all off** with `set_guard enabled:false`; then no hook is
+  ever installed and actions run without pausing you.
 
 Your antivirus may object to this, and that is a reasonable thing for it to do.
 [docs/ANTIVIRUS.md](../docs/ANTIVIRUS.md) explains exactly why, how to verify

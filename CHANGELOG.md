@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.2.0
+
+The input guard, rebuilt around one idea: **a burst of actions is one takeover,
+not ten flickers** — and it never takes the screen without telling you on it.
+
+**One session, not per-action.** The first action that needs the screen opens a
+held block; everything after joins it; the screen comes back once, when the
+assistant ends the block or after a short idle. `focus_window` now goes through
+this too — the old bug where it stole the foreground in silence, with no warning
+and no restore, is gone.
+
+**Warned on screen, never in chat.** When you are active, the edge breathes
+**red and deeper**, then fades red → blue as it settles — plus a **Windows
+notification** that reaches you even in another window. A long block announces
+its length (`~3 min`) instead of a silent freeze.
+
+**Controls in the tray.** Right-click the tray icon for **Pause** and **Stop**;
+they reach the server through a local `mode.json`, so they work even while your
+input is held. **Escape no longer aborts** — a stray Esc can't cancel a task.
+
+**Hands the screen back for logins.** `set_guard await_user:"…"` gives you the
+screen, asks on screen for what only you can do (log in, type a password), and
+waits — doing other background work meanwhile.
+
+**It no longer mistakes its own input for yours.** `GetLastInputInfo` counts
+injected input too — this server's own clicks, its keystrokes, and the Alt tap
+every focus restore performs. Read back naively, that says "the user is typing"
+while nobody is at the desk, and answers with a red pulse and a notification for
+its own activity. Injections are timestamped now; only input **more recent than
+ours** counts as yours.
+
+**`priority:"me"` refuses instead of grabbing.** It waits for your go, and if
+none comes within 45s it fails with a reason — the old path waited two minutes
+and then took the screen anyway, which is the one thing that setting exists to
+prevent.
+
+**Watch mode.** The tray's *Watch the work* leaves the work window in front
+instead of restoring yours after every block; *Work hidden* goes back to normal.
+
+`tests/test_session.py` proves the state machine headless — twelve sections: one
+warn per burst, restore once, focus_window guarded, notification fired, own
+input not misread, announced blocks not cut short, priority 'me' refusing,
+pause/stop/watch honoured through `mode.json`.
+
 ## 1.1.0
 
 A security pass. Nothing here adds a feature; it removes the ways the thing

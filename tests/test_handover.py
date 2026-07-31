@@ -64,27 +64,26 @@ def vor(text, a, b):
 def main():
     import server
 
-    print("1 - taking it: settle, save, check - all under the lock")
-    src = inspect.getsource(server._eingabe_laeuft._nach_dem_sperren)
-    check("settles before reading anything", vor(src, "sleep", "_fokus_sichern"))
-    check("saves the state before checking it",
-          vor(src, "_fokus_sichern", "_lage_pruefen"))
-    check("releases the lock if the check refuses",
-          "_freigeben" in src and "raise" in src)
+    print("1 - opening the session: warn/lock, settle, then save")
+    src = inspect.getsource(server._session_oeffnen)
+    check("locks or warns before saving the state",
+          vor(src, "_warnen_und_sperren", "_fokus_sichern"))
+    check("settles before saving, so the last keystroke has landed",
+          vor(src, "sleep", "_fokus_sichern"))
 
     enter = inspect.getsource(server._eingabe_laeuft.__enter__)
-    check("does NOT save before the lock closes",
-          "_fokus_sichern" not in enter,
-          "saving early records a half-finished keystroke")
-    check("locks, then calls the after-lock step",
-          vor(enter, "lock", "_nach_dem_sperren"))
+    check("joins the session before checking the target",
+          vor(enter, "_session_beruehren", "_lage_pruefen"))
+    check("hands the screen back if the check refuses",
+          "_session_schliessen" in enter and "raise" in enter)
 
     print()
     print("2 - giving it back: restore first, release second")
-    frei = inspect.getsource(server._eingabe_laeuft._freigeben)
+    frei = inspect.getsource(server._session_schliessen)
     check("restores before releasing the input",
           vor(frei, "_fokus_zurueck", 'sagen("release")'),
           "the mirrored race")
+    check("puts the mouse back too", "_maus_zurueck" in frei)
     check("retries once if the window did not come back", "sleep" in frei)
     check("records what was actually restored", "_RUECKGABE" in frei)
 

@@ -51,6 +51,9 @@ jobs:
       - name: The core is offline - no network, no runtime install, zero sockets
         run: python tests/test_offline.py
 
+      - name: One takeover per burst, warned on screen, restored once
+        run: python tests/test_session.py
+
       - name: Non-ASCII survives the protocol
         run: python tests/test_encoding.py
 

@@ -25,7 +25,7 @@ import io as _io
 import traceback
 
 SERVER_NAME = "pc-screen-control"
-SERVER_VERSION = "1.1.0"
+SERVER_VERSION = "1.2.0"
 PROTOCOL_VERSION = "2024-11-05"
 
 # MCP speaks UTF-8 in both directions. Windows does not: a pipe defaults to the
@@ -926,8 +926,18 @@ def t_set_text(args):
 
 def t_focus_window(args):
     el, hwnd = _window_by(args.get("window_handle"), args.get("window_title"))
+    titel = (el.Name or "")[:NAME_CLIP]
+    # Bringing a window forward steals the foreground - as disruptive to someone
+    # who is typing as a click is. It MUST join the session, so it warns, holds
+    # the user's input, and remembers where they were, to be restored when the
+    # block ends. Enforced here: there is no path that foregrounds in silence.
+    _session_beruehren("bring %r to the front" % (titel or "a window"))
     _safe(lambda: el.SetActive())
-    return {"ok": True, "handle": hwnd, "title": (el.Name or "")[:NAME_CLIP]}
+    return {"ok": True, "handle": hwnd, "title": titel,
+            "note": "Foreground handed over under the guard; the user's window is "
+                    "restored when you end the block or after a short idle. "
+                    "Prefer operating a window in the background via invoke / "
+                    "set_text - only bring it to the front when you truly must."}
 
 
 def t_send_keys(args):
@@ -1531,16 +1541,16 @@ def _overlay_starten():
 
 
 def _overlay_lesen():
-    """The overlay reports 'abort' (Escape) and 'go' (wait card clicked)."""
+    """The overlay reports 'go' (the wait card was clicked). Escape no longer
+    aborts anything: a stray Esc must not cancel the assistant mid-task. The
+    tray icon's pause and stop are the deliberate controls instead."""
     p = _OVERLAY["proc"]
     if not p or not p.stdout:
         return
     try:
         for zeile in p.stdout:
             wort = zeile.strip().lower()
-            if wort == "abort":
-                _OVERLAY["abort"] = True
-            elif wort == "go":
+            if wort == "go":
                 _OVERLAY["go"] = True
     except Exception:
         pass
@@ -1690,8 +1700,35 @@ def _lage_pruefen(args, was):
                _beschreibe_fokus(neuer_fokus)))
 
 
+# When WE last injected input. GetLastInputInfo cannot tell a real keystroke
+# from one this server synthesised - our own clicks, our SendKeys, and the Alt
+# tap every focus restore performs all reset it. Without this the server reads
+# its own activity as "the user is typing", and answers with a red pulse and a
+# notification while nobody is even at the desk. So injections are timestamped
+# and compared: only input MORE RECENT than our own counts as the user's.
+_INJEKTION = {"zuletzt": 0.0}
+
+
+def _injektion_merken():
+    import time as _t
+    _INJEKTION["zuletzt"] = _t.time()
+
+
+def _nutzer_aktiv():
+    """True only when the most recent input event was the user's, not ours."""
+    import time as _t
+    leerlauf = _leerlauf_ms()
+    if leerlauf >= GUARD.get("idle_ms", 1500):
+        return False                       # nobody has touched anything lately
+    seit_uns = (_t.time() - _INJEKTION["zuletzt"]) * 1000.0
+    # If our own injection is as recent as the last recorded input, that input
+    # was ours. 200 ms of slack covers the skew between the two clocks.
+    return leerlauf < seit_uns - 200
+
+
 def _leerlauf_ms():
-    """How long since the user last touched anything."""
+    """How long since ANY input arrived - ours included. Use _nutzer_aktiv()
+    to ask whether the *user* is active; this one cannot tell them apart."""
     import ctypes
 
     class LII(ctypes.Structure):
@@ -1792,6 +1829,7 @@ def _vordergrund_setzen(hwnd):
     VK_MENU, KEYUP = 0x12, 0x0002
     u.keybd_event(VK_MENU, 0, 0, 0)
     u.keybd_event(VK_MENU, 0, KEYUP, 0)
+    _injektion_merken()   # this tap is OUR input; do not mistake it for the user
 
     eigen = k.GetCurrentThreadId()
     vorne = u.GetForegroundWindow()
@@ -1874,138 +1912,296 @@ BERUHIGEN_MS = 40
 _RUECKGABE = {}
 
 
-class _eingabe_laeuft(object):
-    """
-    Wraps every operation that takes the physical mouse or keyboard.
+# ---------------------------------------------------------------------------
+# The handover SESSION: one grab, held across calls, given back once.
+#
+# The per-action lock had two faults. It grabbed and restored on every single
+# tool, so a burst of ten actions in two seconds was ten separate takeovers -
+# the user handed back nine times only to be interrupted again. And focus_window
+# did not go through it at all: it stole the foreground in silence, no warning,
+# no restore - which is exactly the report "you took my window and never gave it
+# back".
+#
+# So the lock is a session now. The FIRST action that needs the screen opens it:
+# it warns, holds the input, and photographs where the user was - once.
+# Everything after joins the same open session with no second warning. It closes,
+# restoring the user exactly, when the assistant says it is finished (end_block),
+# or - as a safety net if it forgets - after a short idle. Ten flickers become
+# one clean block, and focus_window obeys the same rule as a click.
+import threading as _threading
 
-    Three behaviours depending on who has priority and whether the user is
-    active right now:
+_SESSION = {
+    "offen": False, "gesichert": None, "maus": None,
+    "letzte": 0.0, "geoeffnet": 0.0, "dauer": None,
+    "nachricht": "", "explizit": False,
+}
+_SESSION_MUTEX = _threading.RLock()
+_WATCHDOG = {"an": False}
 
-      - guard off, or user idle      -> lock immediately, no announcement
-      - priority "claude", user busy -> rubber-band warning, then lock
-      - priority "me", user busy      -> wait, show a card, act only on "go"
+# What the user set from the tray icon (or set_guard): pause holds the assistant,
+# stop halts the task, sichtbar means "keep the work window in front so I watch".
+_STEUER = {"pause": False, "stop": False, "sichtbar": False}
 
-    On exit the edge fades and the saved focus is restored. Escape at any time
-    aborts and raises, so the calling tool stops.
+SESSION_IDLE_S = 2.0     # safety net: give back after this long with no action
+WARTEN_MAX_S = 45.0      # priority "me": how long to wait for a go before refusing
 
-    Pass pruefen=(args, description) to have the takeover check run *inside* the
-    lock. The order matters more than it looks. Checking first and locking
-    afterwards leaves a gap - short, but a click lands in a millisecond, and a
-    gap that only fails sometimes is worse than no check at all, because it
-    teaches you to trust it. Locked first, the screen cannot move while it is
-    being read, so what the check sees is what the action will hit.
-    """
 
-    def __init__(self, pruefen=None):
-        self.pruefen = pruefen
-        self.gesichert = None
-
-    def _freigeben(self):
-        """
-        Put everything back, then hand the input over. That order.
-
-        It used to release the lock first and restore afterwards, which is the
-        same race as checking before locking - only mirrored. Between the two
-        the user is free to type while the screen still points at whatever the
-        action left behind, so a keystroke lands in the wrong window at the very
-        moment the guard believes it is finished.
-
-        Restoring under the lock costs a few milliseconds and closes the gap
-        completely: by the time the keyboard comes back, the screen already
-        looks the way it did before.
-        """
-        _OVERLAY["tiefe"] = max(0, _OVERLAY["tiefe"] - 1)
-        if _OVERLAY["tiefe"] != 0:
+def _steuer_lesen():
+    """Read the tray icon's controls - pause / stop / visible - from mode.json.
+    The tray writes that file, the server reads it before acting, so the two
+    processes share state through a plain local file with no socket. A missing
+    or unreadable file just leaves the current state untouched."""
+    try:
+        pfad = os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                            "pc-screen-control", "mode.json")
+        if not os.path.isfile(pfad):
             return
-        # 1. restore, still frozen
-        rueck = _safe(lambda: _fokus_zurueck(self.gesichert), None) or {}
-        # 2. one retry if the window did not come back - applications sometimes
-        #    take a moment to settle after being operated
-        if not rueck.get("window") and self.gesichert.get("hwnd"):
-            import time as _t
-            _t.sleep(0.08)
-            rueck = _safe(lambda: _fokus_zurueck(self.gesichert), None) or rueck
-            rueck["retried"] = True
-        # 3. only now give the input back
+        import json as _j
+        with open(pfad, encoding="utf-8") as fh:
+            d = _j.load(fh)
+        if "pause" in d:
+            _STEUER["pause"] = bool(d["pause"])
+        if "stop" in d:
+            _STEUER["stop"] = bool(d["stop"])
+        if "visible" in d:
+            _STEUER["sichtbar"] = bool(d["visible"])
+    except Exception:
+        pass
+
+
+def _warnen_und_sperren(nachricht="working", dauer=None):
+    """The warn-or-lock decision, run exactly once when a session opens."""
+    import time as _t
+    if not GUARD.get("enabled", True) or _OVERLAY["off"]:
+        _overlay_sagen("lock")
+        return
+    beschaeftigt = _nutzer_aktiv()
+    if not beschaeftigt:
+        # Nobody is at the desk - take it quietly, no pulse, no notification.
+        _overlay_sagen("lock")
+        return
+
+    text = str(nachricht or "working")
+    if dauer:
+        text += (" - about %d min" % int(round(dauer / 60.0))
+                 if dauer >= 60 else " - about %ds" % int(dauer))
+    text = text.replace("\n", " ")[:220]
+
+    if GUARD.get("priority") == "me":
+        # The user has priority: do not take over at all. Show the card, say
+        # what is wanted, and wait for their go - or for them to stop of their
+        # own accord. This is the gaming / do-not-interrupt setting.
+        #
+        # If neither happens, REFUSE rather than take over anyway. The previous
+        # version waited two minutes and then grabbed the screen regardless,
+        # which is the one thing this setting exists to prevent - and it blocked
+        # a single tool call for those two minutes. Failing with a clear reason
+        # lets the assistant do something else and come back.
+        _overlay_sagen("notify|Waiting for you: " + text)
+        _overlay_sagen("wait_on")
+        frist = _t.time() + WARTEN_MAX_S
+        while _t.time() < frist:
+            if _OVERLAY["go"]:
+                break
+            if not _nutzer_aktiv():
+                break                       # they stopped; take over quietly
+            _t.sleep(0.1)
+        gegangen = _OVERLAY["go"] or not _nutzer_aktiv()
         _overlay_sagen("release")
-        # Recorded rather than discarded: a restore that quietly fails and one
-        # that never ran look identical from outside, which is exactly how the
-        # broken version survived for weeks.
+        if not gegangen:
+            _overlay_sagen("wait_off")
+            raise RuntimeError(
+                "Not taking the screen: the guard is set to priority 'me', the "
+                "user is still working, and they have not clicked go within "
+                "%ds. Nothing was touched. Do something that does not need the "
+                "screen, or try again later." % int(WARTEN_MAX_S))
+        _t.sleep(0.05)
+        _overlay_sagen("lock")
+        return
+
+    # Claude has priority: warn ON SCREEN - a Windows notification that reaches
+    # them even in another window, plus the edge pulse. A chat message is not a
+    # warning; this is. Then the pulse breathes in and flips to hold itself.
+    _overlay_sagen("notify|" + text)
+    _overlay_sagen("warn")
+    _t.sleep((900 + 180) / 1000.0 + 0.1)
+
+
+def _watchdog_sicherstellen():
+    if _WATCHDOG["an"]:
+        return
+    _WATCHDOG["an"] = True
+    _threading.Thread(target=_session_watchdog, daemon=True).start()
+
+
+def _session_oeffnen(nachricht="working", dauer=None, explizit=False):
+    """Open the session if not already open: warn, hold, save - once."""
+    import time as _t
+    with _SESSION_MUTEX:
+        if _SESSION["offen"]:
+            # A later, longer or explicit estimate updates what the user sees.
+            if explizit:
+                _SESSION["explizit"] = True
+            if dauer and (not _SESSION["dauer"] or dauer > _SESSION["dauer"]):
+                _SESSION["dauer"] = dauer
+            if nachricht:
+                _SESSION["nachricht"] = nachricht
+            _SESSION["letzte"] = _t.time()
+            return
+        _watchdog_sicherstellen()
+        _OVERLAY["go"] = False
+        _warnen_und_sperren(nachricht, dauer)
+        _t.sleep(BERUHIGEN_MS / 1000.0)
+        _SESSION["gesichert"] = _safe(_fokus_sichern, {}) or {}
+        _SESSION["maus"] = _safe(_maus_merken, None)
+        _SESSION["offen"] = True
+        _SESSION["geoeffnet"] = _t.time()
+        _SESSION["letzte"] = _t.time()
+        _SESSION["dauer"] = dauer
+        _SESSION["nachricht"] = nachricht or "working"
+        _SESSION["explizit"] = explizit
+
+
+def _session_schliessen():
+    """Give the screen back exactly, then release the input. Idempotent."""
+    import time as _t
+    with _SESSION_MUTEX:
+        if not _SESSION["offen"]:
+            return
+        gesichert = _SESSION["gesichert"] or {}
+        if _STEUER.get("sichtbar"):
+            # Watch mode, chosen in the tray: the user WANTS to see the work, so
+            # putting their old window back in front at the end of every block
+            # would fight them for the screen. Leave the work window where it is
+            # and only give the input back. Switching back to hidden restores
+            # them on the next block as usual.
+            rueck = {"window": False, "control": False, "watching": True}
+        else:
+            rueck = _safe(lambda: _fokus_zurueck(gesichert), None) or {}
+            if not rueck.get("window") and gesichert.get("hwnd"):
+                _t.sleep(0.08)
+                rueck = _safe(lambda: _fokus_zurueck(gesichert), None) or rueck
+                rueck["retried"] = True
+            if _SESSION.get("maus"):
+                _safe(lambda: _maus_zurueck(_SESSION["maus"]))
+        _overlay_sagen("release")
         _RUECKGABE.clear()
         _RUECKGABE.update(rueck)
+        _SESSION["offen"] = False
+        _SESSION["dauer"] = None
+        _SESSION["nachricht"] = ""
+        _SESSION["explizit"] = False
+        # The baseline is the restored screen now, not the window we worked in,
+        # so the next takeover check compares against where the user actually is.
+        _safe(_lage_merken)
+
+
+def _session_beruehren(nachricht="working"):
+    """Every action that needs the screen calls this: opens or joins the block."""
+    import time as _t
+    _steuer_lesen()          # pick up pause / stop / visible from the tray
+    if _STEUER.get("stop"):
+        raise RuntimeError("Stopped by the user from the tray icon. The task was "
+                           "halted; nothing further was done.")
+    if _STEUER.get("pause"):
+        # Hand the screen back and wait, without ending the task. Capped so a
+        # tool call cannot hang forever if the user walks away while paused.
+        _session_schliessen()
+        frist = _t.time() + 45
+        while _STEUER.get("pause") and not _STEUER.get("stop") and _t.time() < frist:
+            _t.sleep(0.1)
+        if _STEUER.get("stop"):
+            raise RuntimeError("Stopped by the user while paused.")
+        if _STEUER.get("pause"):
+            raise RuntimeError("Paused from the tray icon. Resume there to let "
+                               "the assistant continue.")
+    _session_oeffnen(nachricht)
+
+
+def _idle_grenze():
+    """How long a block may sit idle before the screen goes back on its own.
+
+    Two very different cases. An UNANNOUNCED block is a burst of actions with
+    thinking in between - two seconds of nothing means the burst is over, and
+    holding longer would lock the user out of an idle screen. An ANNOUNCED block
+    (block:"start", usually with an estimate) is a promise the user has already
+    seen: "~3 min". Killing that after two seconds would break the promise and
+    scatter it back into the flicker this was built to stop, so it is allowed to
+    breathe - the estimate plus half again, floor of one minute, hard ceiling of
+    five so nothing can hold the screen indefinitely.
+    """
+    if not _SESSION.get("explizit"):
+        return SESSION_IDLE_S
+    dauer = _SESSION.get("dauer") or 0
+    return max(60.0, min(300.0, dauer * 1.5))
+
+
+def _session_watchdog():
+    """If the assistant forgets to end a block, give it back after a short idle."""
+    import time as _t
+    while True:
+        _t.sleep(0.3)
+        try:
+            _steuer_lesen()          # tray pause/stop takes effect even mid-idle
+            if not _SESSION["offen"]:
+                continue
+            if _STEUER.get("pause") or _STEUER.get("stop"):
+                _session_schliessen()
+            elif _t.time() - _SESSION["letzte"] > _idle_grenze():
+                _session_schliessen()
+            else:
+                # Keep the overlay's hard-unlock from firing during a long block.
+                _overlay_sagen("keepalive")
+        except Exception:
+            pass
+
+
+class _eingabe_laeuft(object):
+    """
+    Marks an action that needs the physical mouse/keyboard or the foreground.
+
+    It no longer locks and restores on its own. It joins the handover SESSION -
+    opening it (warn, hold, save) if this is the first action of a burst, or
+    slipping into an already-open one otherwise - and verifies the target under
+    the lock. The screen is given back by the session, once, when the assistant
+    ends the block (end_block) or after a short idle - not here. That is what
+    turns a burst of ten actions into one takeover instead of one flicker each,
+    and it is why focus_window, which also joins the session, warns and restores
+    like everything else.
+
+    Pass pruefen=(args, description) to run the takeover check under the lock:
+    locked first, the screen cannot move while it is read, so what the check sees
+    is what the action will hit. nachricht is the short line the user sees in the
+    edge overlay while the block is held.
+    """
+
+    def __init__(self, pruefen=None, nachricht=None):
+        self.pruefen = pruefen
+        self.nachricht = nachricht or (pruefen[1] if pruefen else "working")
 
     def __enter__(self):
-        _OVERLAY["tiefe"] += 1
-        if _OVERLAY["tiefe"] != 1:
-            return self
-        _OVERLAY["abort"] = False
-        _OVERLAY["go"] = False
-        # Note: the state is NOT saved here. It is saved after the lock has
-        # closed and the queue has settled - see _nach_dem_sperren. Saving
-        # first would record the screen as it was before the user's last
-        # keystroke arrived, and then faithfully restore them to a moment that
-        # never finished happening.
-        import time as _t
-
-        if not GUARD.get("enabled", True) or _OVERLAY["off"]:
-            _overlay_sagen("lock")
-            self._nach_dem_sperren()
-            return self
-
-        beschaeftigt = _leerlauf_ms() < GUARD.get("idle_ms", 1500)
-
-        if beschaeftigt and GUARD.get("priority") == "me":
-            # User has priority: wait for their go, or for them to go idle.
-            _overlay_sagen("wait_on")
-            frist = _t.time() + 120
-            while _t.time() < frist:
-                if _OVERLAY["go"]:
-                    break
-                if _leerlauf_ms() > GUARD.get("idle_ms", 1500) + 800:
-                    break                    # they stopped; take over quietly
-                _t.sleep(0.1)
-            _overlay_sagen("release")
-            _t.sleep(0.05)
-            _overlay_sagen("lock")
-        elif beschaeftigt:
-            # Claude has priority: announce, then lock. The overlay flips to
-            # 'hold' itself at the end of the pulse; we wait that long. The
-            # pulse is deliberately a window in which the user may still type -
-            # so whatever they did with it is exactly what the check below has
-            # to see, and it can only see it once the lock has closed.
-            _overlay_sagen("warn")
-            _t.sleep((900 + 180) / 1000.0 + 0.1)
-        else:
-            _overlay_sagen("lock")
-
-        self._nach_dem_sperren()
+        # Open or join the session: warns, holds and saves exactly once for the
+        # whole burst; a paused user is parked inside here until they resume.
+        _session_beruehren(self.nachricht)
+        if self.pruefen is not None:
+            try:
+                _lage_pruefen(*self.pruefen)
+            except Exception:
+                # Target moved - give the screen back before bailing, so a
+                # refused action never leaves the user frozen out.
+                _session_schliessen()
+                raise
         return self
 
-    def _nach_dem_sperren(self):
-        """
-        Under the lock: let the last input land, photograph the screen, verify.
-
-        All three have to happen here and in this order. The settle is because a
-        keystroke made a moment ago is still in the message queue when the lock
-        closes. The save is after it, so what gets restored later is the screen
-        as it truly ended up, not as it was mid-keystroke. The check is last,
-        because it should judge that same settled state.
-        """
-        import time as _t
-        _t.sleep(BERUHIGEN_MS / 1000.0)
-        self.gesichert = _safe(_fokus_sichern, {}) or {}
-        if self.pruefen is None:
-            return
-        try:
-            _lage_pruefen(*self.pruefen)
-        except Exception:
-            # __exit__ does not run when __enter__ raises, so hand the input
-            # back here or the user stays frozen out.
-            self._freigeben()
-            raise
-
     def __exit__(self, *exc):
-        self._freigeben()
+        # Do NOT restore here. The session stays open so the next action joins
+        # it rather than starting a fresh takeover. Just mark that work happened,
+        # so the idle watchdog measures the gap from now - and that whatever
+        # input this action synthesised was OURS, so the next takeover does not
+        # read it back as the user typing.
+        import time as _t
+        _injektion_merken()
+        _SESSION["letzte"] = _t.time()
         return False
 
 
@@ -2520,6 +2716,27 @@ def t_self_test(args):
     pruefe("Is the accessibility library installed?", uia_da, uia_info,
            "Run: pip install uiautomation")
 
+    # A botched in-place upgrade can leave server.py running WITHOUT its bundled
+    # lib/ and overlay.py beside it. It then falls back to whatever comtypes the
+    # system has, which enumerates zero windows and drops 'comtypes.persist
+    # missing' into the error log. Name that exact failure so the fix is obvious
+    # instead of a mysterious empty screen.
+    hier = os.path.dirname(os.path.abspath(__file__))
+    lib_da = os.path.isdir(os.path.join(hier, "lib"))
+    try:
+        import comtypes.persist as _cp  # noqa: F401 - the piece that goes missing
+        comtypes_ok, comtypes_info = True, "bundled libraries in use"
+    except Exception as e:
+        comtypes_ok = False
+        comtypes_info = "%s - the bundled libraries are NOT loaded" % str(e)[:45]
+    pruefe("Are the bundled libraries loaded, not a broken system copy?",
+           comtypes_ok, comtypes_info,
+           "The install is incomplete: server.py is running without its lib/ "
+           "folder beside it (lib present here: %s). Fully REMOVE the extension "
+           "in Settings > Extensions, quit Claude completely including the tray "
+           "icon, install the .mcpb again, and start twice. An in-place upgrade "
+           "over the old version can leave this half-done." % lib_da)
+
     try:
         import PIL  # noqa: F401 - presence is the check
         bild = "installed"
@@ -2777,13 +2994,22 @@ def t_close_window(args):
 
 def t_set_guard(args):
     """
-    Change how the input guard behaves.
+    Change how the input guard behaves, and bracket a burst of work.
 
-    priority "claude" (default): when the user is typing, Claude shows a
-    rubber-band warning, then locks their input, does the work, and hands focus
-    back. priority "me": Claude does not take over on its own - it waits and
-    shows a small card, and only acts once the user clicks it (or stops for a
-    moment). "me" is for gaming or anything that must not be interrupted.
+    Handover blocks (the important part): before a run of actions that need the
+    screen or the foreground, call this with block:"start" - and, if you already
+    know it will take a while, estimate_seconds so the user sees "~3 min" instead
+    of a silent freeze. Everything until block:"end" is ONE takeover, not one
+    per action, so the user is not handed back and interrupted over and over.
+    Call block:"end" the moment you no longer need control - you are thinking,
+    reading, or working in the background - so the screen returns to them at once
+    rather than after the idle timeout. If you forget, a short idle gives it back
+    anyway; the block only ever makes the takeover cleaner, never traps the user.
+
+    priority "claude" (default): take over with a warning and restore after.
+    priority "me": wait for the user's go before acting. enabled:false turns the
+    guard off entirely. pause/stop/visible mirror the tray icon and are normally
+    set by the user, not the assistant.
     """
     if "priority" in args:
         p = args["priority"]
@@ -2794,7 +3020,34 @@ def t_set_guard(args):
         GUARD["enabled"] = bool(args["enabled"])
     if "idle_ms" in args:
         GUARD["idle_ms"] = max(300, int(args["idle_ms"]))
+
+    if args.get("block") == "start":
+        _session_oeffnen(args.get("message") or "working",
+                         dauer=args.get("estimate_seconds"), explizit=True)
+    elif args.get("block") == "end":
+        _session_schliessen()
+
+    if args.get("await_user"):
+        # The assistant needs the USER to do something it must not do itself -
+        # log in, enter a password, pick a file. Hand the screen straight back,
+        # tell them on screen what is needed, and stop taking over. The assistant
+        # then either does other, non-foreground work or re-reads the screen
+        # until it sees they are done. This is how a login is handled: the tool
+        # never types the password; the person does.
+        _session_schliessen()
+        _overlay_sagen("notify|Over to you: " + str(args["await_user"])[:200])
+
+    # These are the tray icon's controls; exposed here too for completeness.
+    if "pause" in args:
+        _STEUER["pause"] = bool(args["pause"])
+    if "stop" in args:
+        _STEUER["stop"] = bool(args["stop"])
+    if "visible" in args:
+        _STEUER["sichtbar"] = bool(args["visible"])
+
     return {"ok": True, "guard": dict(GUARD),
+            "session_open": _SESSION["offen"],
+            "controls": dict(_STEUER),
             "note": ("Claude announces and takes over; your input is held and "
                      "your focus restored afterwards."
                      if GUARD["priority"] == "claude" and GUARD["enabled"] else
@@ -2950,10 +3203,13 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "window_handle": I, "window_title": S, "all": B}}},
     {"name": "set_guard", "_fn": t_set_guard,
-     "description": "Sets who has priority while Claude uses the mouse or keyboard. 'claude' (default): when the user is active, a rubber-band pulse warns them, their input is briefly held, and their window and text cursor are put back afterwards. 'me': Claude never takes over on its own - it waits and shows a small card, acting only when the user clicks it. Use 'me' when the user is gaming or doing something that must not be interrupted. Also toggles the whole guard on/off.",
+     "description": "Guard settings AND handover blocks. THE IMPORTANT USE: bracket a run of screen/foreground actions as ONE takeover instead of many. Call block:'start' before the run (with estimate_seconds if you already know it is long, so the user sees '~3 min' not a silent freeze); call block:'end' the instant you no longer need control - thinking, reading, or working in the background - so the screen returns to them at once. Forgetting is safe: a short idle gives it back anyway. Without a block, a burst still coalesces by idle, but explicit start/end is cleaner. priority 'claude' (default): warn, hold, restore. 'me': wait for the user's go. enabled:false turns the guard off. Use await_user to hand the screen back and ask the person, on screen, to do something you must not - log in, type a password, pick a file - then wait or do other background work until they are done. pause/stop/visible mirror the tray icon and are normally the user's, not yours.",
      "inputSchema": {"type": "object", "properties": {
          "priority": {"type": "string", "enum": ["claude", "me"]},
-         "enabled": B, "idle_ms": I}}},
+         "enabled": B, "idle_ms": I,
+         "block": {"type": "string", "enum": ["start", "end"]},
+         "estimate_seconds": I, "message": S, "await_user": S,
+         "pause": B, "stop": B, "visible": B}}},
 ]
 
 _BY_NAME = {t["name"]: t for t in TOOLS}
