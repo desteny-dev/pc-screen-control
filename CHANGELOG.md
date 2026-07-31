@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.2.1
+
+**`launch_app` is guarded too.** Starting a program puts a window in front — a
+console flashing up for two seconds is enough to take the caret out of what you
+were typing, so those keystrokes go nowhere and your text ends up with a hole in
+it. It joins the handover block now: you get the pulse and the notification
+before the window appears, your input is held instead of lost, and your place
+comes back. Same fault `focus_window` had, same fix.
+
+**The guard survives a machine with no desktop.** `_leerlauf_ms` called `windll`
+and raised where there is none, which — now that the guard fronts more tools —
+took down calls that have nothing to do with the screen. It answers "nobody is
+there" instead, the safe reading: work proceeds without a warning nobody would
+see. Four tests that used to skip for want of a desktop now run.
+
+**Says why a sequence belongs in one call.** `batch` and the manifest now name
+the real cost: not round trips, but *your* time. Between two calls the assistant
+is thinking, and while it thinks the screen is still held — five predictable
+steps taken one at a time can occupy you for a minute over ten seconds of work.
+Decide the sequence first, run it in one go, and hand the screen back *before*
+working out anything unexpected, not after.
+
 ## 1.2.0
 
 The input guard, rebuilt around one idea: **a burst of actions is one takeover,
