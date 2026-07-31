@@ -303,7 +303,65 @@ def _wirkung(vorher, nachher):
     return diff
 
 
+# What each handed-out ref pointed at, so a ref can be found again after the
+# tree underneath it shifts. A ref is a path of child indexes, which is exact
+# and cheap - and wrong the moment a node is inserted above the target. On a
+# desktop application that is rare; on a modern web page it is constant, because
+# the page re-renders in the background between two calls. Measured on a GitHub
+# form: a ref read one call earlier was already stale, so set_text could name
+# the field and not fill it, and the only way left was the mouse - the exact
+# step down the ladder this server exists to avoid. Bounded, so a long session
+# cannot grow it without limit.
+_REF_SPUR = _collections.OrderedDict()
+REF_SPUR_MAX = 400
+
+
+def _spur_merken(ref, el):
+    try:
+        _REF_SPUR[ref] = (
+            _safe(lambda: el.ControlTypeName, "") or "",
+            _safe(lambda: el.AutomationId, "") or "",
+            (_safe(lambda: el.Name, "") or "")[:80],
+            _safe(lambda: el.ClassName, "") or "",
+        )
+        _REF_SPUR.move_to_end(ref)
+        while len(_REF_SPUR) > REF_SPUR_MAX:
+            _REF_SPUR.popitem(last=False)
+    except Exception:
+        pass
+
+
+def _spur_suchen(hwnd, spur, grenze=4000):
+    """Find the element a stale ref used to mean, by what it was."""
+    art, aid, name, cls = spur
+    wurzel = _safe(lambda: auto.ControlFromHandle(int(hwnd)))
+    if wurzel is None:
+        return None
+    bester = None
+    stapel = [(wurzel, 0)]
+    gesehen = 0
+    while stapel and gesehen < grenze:
+        el, tiefe = stapel.pop()
+        gesehen += 1
+        e_aid = _safe(lambda: el.AutomationId, "") or ""
+        e_art = _safe(lambda: el.ControlTypeName, "") or ""
+        # An automation_id is the strong identity: stable across renders and
+        # across display languages. Take the first exact hit and stop.
+        if aid and e_aid == aid and e_art == art:
+            return el
+        if bester is None and not aid:
+            e_name = (_safe(lambda: el.Name, "") or "")[:80]
+            e_cls = _safe(lambda: el.ClassName, "") or ""
+            if e_art == art and e_name == name and e_cls == cls:
+                bester = el          # keep looking for an id match, else use this
+        if tiefe < 40:
+            for k in (_safe(lambda: el.GetChildren(), []) or []):
+                stapel.append((k, tiefe + 1))
+    return bester
+
+
 def _describe(el, ref):
+    _spur_merken(ref, el)
     d = {"ref": ref, "role": _role(el),
          "name": (_safe(lambda: el.Name, "") or "")[:NAME_CLIP]}
     aid = _safe(lambda: el.AutomationId, "") or ""
@@ -388,19 +446,55 @@ def _window_by(handle=None, title=None):
 
 
 def _resolve(ref):
+    """
+    Turn a ref back into an element - and find it again if the tree moved.
+
+    The index path is tried first because it is exact and costs nothing. When it
+    no longer leads anywhere, or leads somewhere that is plainly not the same
+    control, the element is looked up by what it WAS: its automation id, type,
+    name and class, recorded when the ref was handed out. On a web page that
+    re-renders between two calls this is the difference between operating a
+    field by name and having to fall back to the mouse.
+
+    Only ever a second attempt. Nothing here changes what a working ref means.
+    """
     _require_uia()
     hs, _, path = str(ref).partition(":")
     el = auto.ControlFromHandle(int(hs))
     if el is None:
         raise ValueError("Window %s no longer exists - re-read the tree." % hs)
+
+    spur = _REF_SPUR.get(str(ref))
+    treffer = el
     if path:
         for p in path.split("."):
-            kids = el.GetChildren()
+            kids = _safe(lambda: treffer.GetChildren(), []) or []
             i = int(p)
             if i < 0 or i >= len(kids):
-                raise ValueError("Ref %r is stale - re-read the tree." % ref)
-            el = kids[i]
-    return el
+                treffer = None
+                break
+            treffer = kids[i]
+
+    if treffer is not None and spur:
+        # The path still leads somewhere - make sure it is the same thing.
+        jetzt = (_safe(lambda: treffer.ControlTypeName, "") or "",
+                 _safe(lambda: treffer.AutomationId, "") or "",
+                 (_safe(lambda: treffer.Name, "") or "")[:80],
+                 _safe(lambda: treffer.ClassName, "") or "")
+        if spur[1] and jetzt[1] != spur[1]:
+            treffer = None                      # different control at that path
+        elif not spur[1] and (jetzt[0], jetzt[2]) != (spur[0], spur[2]):
+            treffer = None
+
+    if treffer is None:
+        if spur:
+            treffer = _safe(lambda: _spur_suchen(int(hs), spur))
+        if treffer is None:
+            raise ValueError(
+                "Ref %r is stale and the control it named could not be found "
+                "again - re-read the tree." % ref)
+        _spur_merken(str(ref), treffer)
+    return treffer
 
 
 def _geschwister_index(parent, kind):
@@ -2105,6 +2199,63 @@ def _session_schliessen():
         _safe(_lage_merken)
 
 
+# ---------------------------------------------------------------------------
+# Which tools may run without the guard.
+#
+# The rule used to be "anything that takes the mouse or keyboard", and that was
+# wrong in a way that only shows up in use. Operating a control through the
+# accessibility interface takes no pointer - but the application on the other
+# end is free to raise itself in response, and it usually does. Pressing a
+# button in a chat window brought that window to the front, the caret went with
+# it, and the person typing a report sent their next sentence into someone
+# else's message box. No pulse, no hold, no restore, because "invoke" was
+# classed as harmless.
+#
+# So the boundary is not "does this use the pointer" but "can this change what
+# is on screen". Reading cannot; everything else can. This list is therefore of
+# READERS, and anything absent is guarded - a tool added later is protected by
+# default, and forgetting to think about it fails safe instead of quietly
+# repeating that bug. tests/test_guard_coverage.py holds the line.
+LESENDE_WERKZEUGE = frozenset({
+    "describe_screen", "list_windows", "read_ui_tree", "find_elements",
+    "element_from_point", "get_focus", "get_text", "read_text", "read_table",
+    "capture", "self_test", "wait", "wait_for", "clipboard",
+    # set_guard is how a block is opened and closed; it must not open one itself
+    "set_guard",
+})
+
+
+def _vor_dem_werkzeug(name, args):
+    """Runs before every tool call: guard everything that is not a reader."""
+    if name in LESENDE_WERKZEUGE:
+        return
+    _session_beruehren(_werkzeug_satz(name, args))
+
+
+def _werkzeug_satz(name, args):
+    """A short line for the notification, so the user reads what is happening
+    rather than a tool name."""
+    ziel = ""
+    for k in ("window_title", "command", "text", "keys", "query"):
+        w = args.get(k)
+        if isinstance(w, str) and w.strip():
+            ziel = w.strip()[:40]
+            break
+    worte = {
+        "invoke": "press a control", "set_text": "fill in a field",
+        "toggle": "switch a setting", "select": "choose an entry",
+        "expand": "open a list", "set_value": "set a value",
+        "menu": "open a menu", "window": "move a window",
+        "close_window": "close a window", "focus_window": "bring a window forward",
+        "launch_app": "start a program", "click": "click", "drag": "drag",
+        "scroll": "scroll", "send_keys": "type", "hold_key": "hold a key",
+        "claim_window": "park a window out of reach",
+        "release_window": "put a window back", "batch": "run several steps",
+    }
+    satz = worte.get(name, name.replace("_", " "))
+    return ("%s: %s" % (satz, ziel)) if ziel else satz
+
+
 def _session_beruehren(nachricht="working"):
     """Every action that needs the screen calls this: opens or joins the block."""
     import time as _t
@@ -3263,6 +3414,7 @@ def _handle(msg):
                    "error": {"code": -32601, "message": "Unknown tool"}})
             return
         try:
+            _vor_dem_werkzeug(t["name"], p.get("arguments") or {})
             out = t["_fn"](p.get("arguments") or {})
             if isinstance(out, dict) and "_content" in out:
                 content = out["_content"]

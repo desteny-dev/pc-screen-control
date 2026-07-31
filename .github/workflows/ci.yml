@@ -57,6 +57,12 @@ jobs:
       - name: Serves any MCP client over stdio, and fails politely
         run: python tests/test_any_client.py
 
+      - name: Every tool that can change the screen is guarded
+        run: python tests/test_guard_coverage.py
+
+      - name: A ref survives the page moving underneath it
+        run: python tests/test_refs_stale.py
+
       - name: Non-ASCII survives the protocol
         run: python tests/test_encoding.py
 

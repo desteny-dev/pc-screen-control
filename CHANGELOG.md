@@ -2,6 +2,35 @@
 
 ## 1.2.1
 
+### The guard had a hole, and it was the wrong shape
+
+The guard protected the tools that take the mouse or keyboard. Operating a
+control through the accessibility interface takes neither, so `invoke` was
+treated as harmless — and it is not. **The application on the other end raises
+itself when one of its buttons is pressed.** A button was pressed in a chat
+window, the window came to the front, the caret went with it, and the person
+typing a report at that moment sent their next sentence into someone else's
+message box. No pulse, no hold, nothing put back.
+
+The boundary was wrong. It is not *"does this use the pointer"* — it is
+**"can this change what is on screen"**. Reading cannot; everything else can.
+
+So the guard moved to the one place every call passes through, and the server
+now keeps a list of **readers**. Anything not on it is guarded: `invoke`,
+`set_text`, `toggle`, `select`, `expand`, `set_value`, `menu`, `window`,
+`close_window`, `focus_window`, `launch_app`, `scroll`, `batch`,
+`claim_window`, `release_window` — as well as the four that always were. **A
+tool added later is protected by default**, and forgetting to think about it
+fails safe instead of quietly repeating this. `tests/test_guard_coverage.py`
+walks the real tool list and holds that line in CI.
+
+**Refs survive the page moving under them.** A ref is a path of child indexes:
+exact, and wrong the moment something is inserted above the target — which on a
+web page happens between two calls. It is now looked up again by what it *was*
+(automation id, type, name, class), so a field can still be filled by name
+instead of falling back to the mouse. Measured on a GitHub form, where a ref
+read one call earlier was already stale.
+
 **`launch_app` is guarded too.** Starting a program puts a window in front — a
 console flashing up for two seconds is enough to take the caret out of what you
 were typing, so those keystrokes go nowhere and your text ends up with a hole in

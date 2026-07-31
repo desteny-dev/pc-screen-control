@@ -16,6 +16,8 @@ python tests/test_update_verify.py # the update download is hash-checked
 python tests/test_offline.py       # no network, no runtime install, 0 sockets
 python tests/test_session.py       # one takeover per burst, warned, restored
 python tests/test_any_client.py    # serves any MCP client, fails politely
+python tests/test_guard_coverage.py # nothing that changes the screen is unguarded
+python tests/test_refs_stale.py    # a ref survives the page moving under it
 python tests/test_encoding.py      # non-ASCII survives the protocol
 python tests/test_refs.py          # refs resolve, and invoke refuses the mouse
 python tests/test_takeover.py      # blind input stops if the user took over
@@ -27,7 +29,7 @@ python tests/stress.py             # cost, nonsense, broken protocol, ~1 min
 python src/server.py --install     # register it with your MCP client
 ```
 
-CI runs all thirteen on Windows against Python 3.9, 3.11 and 3.13.
+CI runs all fifteen on Windows against Python 3.9, 3.11 and 3.13.
 
 ## The one rule
 
