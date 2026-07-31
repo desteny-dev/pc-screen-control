@@ -1728,15 +1728,24 @@ def _nutzer_aktiv():
 
 def _leerlauf_ms():
     """How long since ANY input arrived - ours included. Use _nutzer_aktiv()
-    to ask whether the *user* is active; this one cannot tell them apart."""
-    import ctypes
+    to ask whether the *user* is active; this one cannot tell them apart.
 
-    class LII(ctypes.Structure):
-        _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
-    lii = LII()
-    lii.cbSize = ctypes.sizeof(LII)
-    if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
-        return ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+    Answers "nobody is there" rather than raising when it cannot ask - off
+    Windows there is no windll at all. The guard sits in front of every action
+    now, so a failure here would take down tools that have nothing to do with
+    the screen; a machine that cannot report idle time is treated as idle, which
+    is the safe reading: work proceeds without a warning nobody would see."""
+    try:
+        import ctypes
+
+        class LII(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+        lii = LII()
+        lii.cbSize = ctypes.sizeof(LII)
+        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            return ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+    except Exception:
+        pass
     return 999999
 
 
@@ -2536,6 +2545,14 @@ def t_launch_app(args):
             "(e.g. 'notepad.exe' or a document path). If a shell command is "
             "genuinely what the user asked for, pass confirm:true.")
 
+    # Starting a program puts a new window in front - a console flashing up for
+    # two seconds is enough to take the caret out of whatever the user was
+    # typing into, so their next keystrokes go nowhere and their text ends up
+    # with a hole in it. That is a takeover like any other, so it joins the
+    # session: they get the warning, their input is held rather than lost into
+    # the wrong window, and their place comes back when the block ends.
+    _session_beruehren("start %s" % os.path.basename(befehl.strip('"'))[:60])
+
     try:
         if confirm:
             subprocess.Popen(befehl, shell=True)     # explicit, user-approved
@@ -3162,7 +3179,7 @@ TOOLS = [
          "ref": S, "expect": S, "field": S, "window_title": S,
          "query": S, "in_window": S, "window_handle": I, "timeout": I}}},
     {"name": "batch", "_fn": t_batch,
-     "description": "Runs several steps in ONE call, each with its own result and effect verification. Stops at the first failure and reports where. Example: [{'tool':'invoke','args':{...}},{'tool':'wait_for','args':{'query':'Done'}}]. Saves round trips on predictable sequences.",
+     "description": "Runs several steps in ONE call, each with its own result and effect verification. Stops at the first failure and reports where. Example: [{'tool':'invoke','args':{...}},{'tool':'wait_for','args':{'query':'Done'}}]. USE THIS FOR ANY SEQUENCE YOU CAN ALREADY PREDICT. The reason is not round trips, it is the user's time: between two separate calls you are thinking, and thinking is slow, so a five-step job done one call at a time keeps the screen occupied for far longer than the work itself takes. Decide the whole sequence first - the exact refs, the exact text, the order - then run it here in one go. When something genuinely unexpected turns up, end the block (set_guard block:'end') so the user gets their screen back WHILE you work out what to do, and open a new one when you know.",
      "inputSchema": {"type": "object", "properties": {
          "steps": {"type": "array", "items": {"type": "object"}}},
          "required": ["steps"]}},

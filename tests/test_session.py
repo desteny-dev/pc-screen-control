@@ -96,6 +96,27 @@ def main():
           server._SESSION["gesichert"].get("hwnd") == 4242)
 
     print()
+    print("3b - launch_app joins the session too (a new window steals focus)")
+    # Reported from real use: a console window flashed up for two seconds, took
+    # the caret out of the report being written, and the keystrokes typed in
+    # those seconds went nowhere - a hole in the text, with no warning first.
+    reset()
+    gestartet = {"n": 0}
+    # A real file, so the "open it with its default handler" branch is the one
+    # taken; the handler itself is stubbed so nothing actually starts.
+    import tempfile as _tf
+    skript = os.path.join(_tf.mkdtemp(), "some-script.bat")
+    open(skript, "w").close()
+    server.os.startfile = lambda p: gestartet.__setitem__("n", 1)
+    server.t_launch_app({"command": skript})
+    check("it did start the program", gestartet["n"] == 1)
+    check("launch_app opened a guarded session", server._SESSION["offen"])
+    check("it warned before the window appeared", "warn" in signale,
+          ", ".join(signale))
+    check("it saved the user's spot first",
+          (server._SESSION["gesichert"] or {}).get("hwnd") == 4242)
+
+    print()
     print("4 - the idle watchdog gives it back if the assistant forgets")
     server.SESSION_IDLE_S = 0.6
     server._session_beruehren("still working")   # refresh, keep it open
