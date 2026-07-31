@@ -134,9 +134,17 @@ def main():
         check("%s does not check before locking" % name,
               "_lage_pruefen" not in quelle)
 
-    quelle = inspect.getsource(server._eingabe_laeuft)
-    check("the lock settles before reading", "BERUHIGEN_MS" in quelle)
-    check("the lock is released if the check refuses", "_freigeben" in quelle)
+    # Since the guard became a session, the lock is taken once per block rather
+    # than once per action: the settle now lives where the block opens, and the
+    # screen is handed back by the session when a check refuses. Same order,
+    # different home - so look where it actually is.
+    oeffnen = inspect.getsource(server._session_oeffnen)
+    check("the block settles before reading", "BERUHIGEN_MS" in oeffnen)
+    check("it locks before it saves",
+          oeffnen.index("_warnen_und_sperren") < oeffnen.index("_fokus_sichern"))
+    betreten = inspect.getsource(server._eingabe_laeuft.__enter__)
+    check("the screen is handed back if the check refuses",
+          "_session_schliessen" in betreten and "raise" in betreten)
     check("a settle delay exists and is small",
           0 < server.BERUHIGEN_MS <= 200, "%d ms" % server.BERUHIGEN_MS)
 
