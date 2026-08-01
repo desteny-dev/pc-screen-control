@@ -6,7 +6,7 @@
 
 ## Start here
 
-**Current state:** v1.3.4 is released. 34 tools, 18 test files in CI on Python
+**Current state:** v1.4.0 is released. 34 tools, 18 test files in CI on Python
 3.9 / 3.11 / 3.13, all green. Two packages ship: `.mcpb` for Claude Desktop and
 `.zip` with a setup script for ChatGPT desktop, Codex, Cursor, VS Code, Cline
 and Zed — same server inside both.
@@ -45,6 +45,14 @@ after the restore, as opposed to whether the call returned true.
 between turns. Only `set_guard` said whether a block was open, and swallowed
 exceptions were recorded but only visible in `self_test`, which nobody runs
 mid-task. Both now ride along with every acting call.
+
+1.4.0 — and then the visual half was measured for the first time instead of
+assumed. The pulse and the notification work. What did not: the overlay was
+never restarted after it died, so one crash silently ended the guard for the
+rest of the server's life; a leftover overlay sat glowing with nothing held;
+and the frame followed the virtual desktop rather than each monitor, so on a
+second, shorter screen a person got two edges out of four. `wait` inside
+`batch` is refused past 2 seconds rather than merely discouraged.
 
 **The pattern worth carrying forward:** every one of these was a case where the
 code was internally consistent and still wrong, because the question it asked
@@ -100,38 +108,29 @@ tried and rejected with reasons recorded there.
 Everything below is unclaimed and worth doing. Nothing here is on the Version 1
 checklist — that one is finished.
 
-**1. The tray icon is written but never verified on a real desktop.**
-`src/overlay.py` adds a tray icon with Pause, Stop and Watch/Hidden, writing to
-`mode.json`, which the server reads before every action. The state machine is
-tested headless in `tests/test_session.py`; the Win32 half — does the icon
-appear, does the menu open, does a click while input is held still reach it —
-has never been run. That last part matters most: the controls must stay
-clickable *while the guard is holding the mouse*, or they are decoration.
+**1. The tray icon's controls have never been clicked while input is held.**
+The icon appears and the menu is written; the state machine is tested headless
+in `tests/test_session.py`. What is still unmeasured is the part that matters:
+Pause, Stop and Watch must stay clickable *while the guard is swallowing the
+mouse*, or they are decoration. That needs a hand on a real mouse.
 
-**2. The red pulse and the notification are unverified too.**
-Same reason. `_bar_pixels` now animates red → blue and reaches deeper while the
-user is active, and `notify|` shows a Windows balloon. Both are pure ctypes
-drawing. Colours, timing and whether the balloon appears at all on a machine
-with notifications restricted: unmeasured.
-
-**3. `wait` inside a `batch` holds the screen for its whole duration.**
-Documented as a rule, not enforced. A step that sleeps ten seconds inside a
-block keeps the user locked out for ten seconds of nothing. Options: refuse long
-waits inside `batch`, or have the session release around them and reopen after.
-Second one is nicer and harder — reopening re-warns, which may be worse than the
-wait. Measure before choosing.
-
-**4. `_spur_suchen` walks up to 4000 nodes on a stale ref.**
-The fallback that finds a control again after a page re-render is a full subtree
-walk. On a big Electron window that is not free, and it runs on the failure path
-where things are already going wrong. An automation-id index built during the
-tree walk would make it O(1). Only worth doing with a measurement showing the
-walk actually hurts.
-
-**5. macOS.** `docs/PORTING.md` maps every pattern used here onto the
+**2. macOS.** `docs/PORTING.md` maps every pattern used here onto the
 Accessibility API. That map has never been compiled. The guard is the harder
 half: macOS has no `WH_KEYBOARD_LL`, and holding input needs an Accessibility
 permission the user grants explicitly.
+
+**3. `_spur_suchen` — decide it from the numbers now.**
+The 4000-node rescue walk measures itself since 1.4.0 and `self_test` reports
+`stale_ref_rescue`: runs, nodes, seconds, worst run, and how often the limit
+was hit. If the worst run is milliseconds, leave it alone. If it is not, an
+automation-id index built during the tree read makes it O(1). **Do not touch
+this without pasting the numbers.**
+
+*Closed in 1.4.0, all by measurement on a real desktop, not by reasoning:* the
+pulse and the notification (pixels read on every edge of both monitors); the
+overlay restarting after it dies; a leftover overlay left glowing; the frame
+following the virtual desktop instead of each monitor; and `wait` inside
+`batch`, which is now refused past 2 seconds instead of merely discouraged.
 
 **Not open, deliberately:** anything that puts the server on a network,
 anything that makes a tool reach the internet, and any "convenience" that

@@ -25,7 +25,7 @@ import io as _io
 import traceback
 
 SERVER_NAME = "pc-screen-control"
-SERVER_VERSION = "1.3.4"
+SERVER_VERSION = "1.4.0"
 PROTOCOL_VERSION = "2024-11-05"
 
 # MCP speaks UTF-8 in both directions. Windows does not: a pipe defaults to the
@@ -331,8 +331,37 @@ def _spur_merken(ref, el):
         pass
 
 
+# How long a wait may be inside a batch. Long enough for a window to finish
+# painting, far too short to be a pause somebody sits through.
+WARTEN_IM_BATCH_MAX_S = 2.0
+
+# What the stale-ref rescue actually costs, measured rather than assumed.
+_SPUR_KOSTEN = {"laeufe": 0, "knoten": 0, "sekunden": 0.0,
+                "schlimmster_lauf_s": 0.0, "grenze_erreicht": 0}
+
+
+def _spur_messen(knoten, dauer, an_der_grenze):
+    _SPUR_KOSTEN["laeufe"] += 1
+    _SPUR_KOSTEN["knoten"] += knoten
+    _SPUR_KOSTEN["sekunden"] += dauer
+    _SPUR_KOSTEN["schlimmster_lauf_s"] = max(
+        _SPUR_KOSTEN["schlimmster_lauf_s"], round(dauer, 3))
+    if an_der_grenze:
+        _SPUR_KOSTEN["grenze_erreicht"] += 1
+
+
 def _spur_suchen(hwnd, spur, grenze=4000):
-    """Find the element a stale ref used to mean, by what it was."""
+    """Find the element a stale ref used to mean, by what it was.
+
+    This walks up to `grenze` nodes, and it runs on the failure path - where
+    things are already going wrong and a person is already waiting. Whether
+    that walk is worth replacing with an index built during the tree read is a
+    question nobody here could answer, because nobody had ever measured it. So
+    it measures itself now: how many nodes, how long, and whether it hit the
+    limit. The numbers come back in self_test, and the decision can be made
+    from data instead of from a feeling that 4000 sounds like a lot."""
+    import time as _t
+    begonnen = _t.time()
     art, aid, name, cls = spur
     wurzel = _safe(lambda: auto.ControlFromHandle(int(hwnd)))
     if wurzel is None:
@@ -348,6 +377,7 @@ def _spur_suchen(hwnd, spur, grenze=4000):
         # An automation_id is the strong identity: stable across renders and
         # across display languages. Take the first exact hit and stop.
         if aid and e_aid == aid and e_art == art:
+            _spur_messen(gesehen, _t.time() - begonnen, False)
             return el
         if bester is None and not aid:
             e_name = (_safe(lambda: el.Name, "") or "")[:80]
@@ -357,6 +387,7 @@ def _spur_suchen(hwnd, spur, grenze=4000):
         if tiefe < 40:
             for k in (_safe(lambda: el.GetChildren(), []) or []):
                 stapel.append((k, tiefe + 1))
+    _spur_messen(gesehen, _t.time() - begonnen, gesehen >= grenze)
     return bester
 
 
@@ -1752,8 +1783,35 @@ _OVERLAY = {"proc": None, "off": False, "tiefe": 0,
 
 
 def _overlay_starten():
-    if _OVERLAY["off"] or _OVERLAY["proc"] is not None:
-        return _OVERLAY["proc"]
+    """
+    Start the overlay - and start it AGAIN if it has died.
+
+    This used to return the stored handle whenever it was not None, which is
+    true of a dead process too. So the first time the overlay ended for any
+    reason - killed, crashed, closed with the desktop session - every later
+    command went to a pipe nobody was reading, silently. And the overlay is not
+    decoration: the warning, the pulse, the notification AND the input hold all
+    live in it. Losing it once meant losing the guard for the rest of the
+    server's life, with nothing anywhere saying so.
+
+    Restarts are counted. If it will not stay up, the guard is switched off
+    honestly and self_test says why, rather than a restart loop that eats the
+    machine while pretending to protect it.
+    """
+    if _OVERLAY["off"]:
+        return None
+    p = _OVERLAY["proc"]
+    if p is not None and p.poll() is None:
+        return p
+    if p is not None:
+        _OVERLAY["gestorben"] = _OVERLAY.get("gestorben", 0) + 1
+        _OVERLAY["proc"] = None
+        _OVERLAY["haelt"] = None          # nothing is held until it says so
+        if _OVERLAY["gestorben"] > 5:
+            _OVERLAY["off"] = True
+            sys.stderr.write("[overlay] died %d times; guard disabled\n"
+                             % _OVERLAY["gestorben"])
+            return None
     skript = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "overlay.py")
     if not os.path.isfile(skript) or os.name != "nt":
@@ -2947,6 +3005,29 @@ def t_batch(args):
             erg.append({"step": i, "tool": name,
                         "error": "not allowed inside batch"})
             return {"executed": i, "aborted": True, "results": erg}
+        # A long sleep inside a batch is the worst thing this tool can do to a
+        # person: the screen is held, their input is swallowed, and nothing is
+        # happening. Ten seconds of that is ten seconds of being locked out of
+        # their own machine for nothing. It was written down as a rule and rules
+        # that are only written down get broken, so it is enforced here.
+        #
+        # Short settles stay - a UI needs a beat to catch up, and refusing those
+        # would push everyone back to one call per step, which costs the person
+        # far more.
+        if name in ("wait", "wait_for"):
+            wie_lang = float((s.get("args") or {}).get(
+                "seconds", (s.get("args") or {}).get("timeout", 0)) or 0)
+            if wie_lang > WARTEN_IM_BATCH_MAX_S:
+                erg.append({"step": i, "tool": name, "error": (
+                    "Refusing to wait %.1fs inside a batch. The block is held "
+                    "for the whole batch, so this is %.1fs of the person "
+                    "locked out of their own screen while nothing happens. "
+                    "Split it: end this batch, call set_guard block:'end', "
+                    "wait outside the block, then open a new one and carry on. "
+                    "Waits up to %.0fs are fine here - that is a UI catching "
+                    "up, not a pause." % (wie_lang, wie_lang,
+                                          WARTEN_IM_BATCH_MAX_S))})
+                return {"executed": i, "aborted": True, "results": erg}
         try:
             out = t["_fn"](s.get("args") or {})
             erg.append({"step": i, "tool": name, "result": out})
@@ -3316,6 +3397,14 @@ def t_self_test(args):
             "failed": len(schlecht),
             "swallowed_errors_total": _FEHLER_ZAEHLER["total"],
             "swallowed_errors_recent": letzte_fehler,
+            # The stale-ref rescue walk, measured. Whether it is worth
+            # replacing with an index is a question for these numbers, not for
+            # anybody's intuition about 4000 nodes.
+            "stale_ref_rescue": dict(
+                _SPUR_KOSTEN,
+                sekunden=round(_SPUR_KOSTEN["sekunden"], 3),
+                knoten_pro_lauf=(_SPUR_KOSTEN["knoten"] //
+                                 max(1, _SPUR_KOSTEN["laeufe"]))),
             "verdict": ("Everything works." if not schlecht else
                         "Working, with one thing missing - see 'fix'."
                         if not kritisch else

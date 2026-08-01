@@ -72,6 +72,8 @@ HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, WPARAM, LPARAM)
 WS_POPUP = 0x80000000
 WS_EX = (0x00080000 | 0x00000020 | 0x00000080 | 0x08000000 | 0x00000008)
 ULW_ALPHA = 0x02
+HWND_TOPMOST = -1
+SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
 SW_HIDE, SW_SHOWNA = 0, 8
 WH_KEYBOARD_LL, WH_MOUSE_LL = 13, 14
 LLKHF_INJECTED, LLMHF_INJECTED = 0x10, 0x01
@@ -145,6 +147,9 @@ def _declare():
     user32.SetTimer.restype = ctypes.c_void_p
     user32.SetTimer.argtypes = [w.HWND, ctypes.c_void_p, w.UINT, ctypes.c_void_p]
     user32.KillTimer.argtypes = [w.HWND, ctypes.c_void_p]
+    user32.SetWindowPos.argtypes = [w.HWND, w.HWND, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+    user32.SetWindowPos.restype = w.BOOL
     user32.GetCursorPos.argtypes = [ctypes.POINTER(w.POINT)]
     gdi32.CreateCompatibleDC.restype = w.HDC
     gdi32.CreateCompatibleDC.argtypes = [w.HDC]
@@ -214,13 +219,45 @@ def _bar_pixels(breite, hoehe, seite, tiefe, staerke):
         return bytes(zeile) * hoehe
 
 
-class Bar(object):
-    """One edge strip as its own click-through layered window."""
+def monitore():
+    """Every monitor's own rectangle.
 
-    def __init__(self, seite):
+    The bars used to follow the virtual desktop - one box around ALL screens.
+    That looks right on a single monitor and is wrong on every other setup:
+    measured here on two screens of different height, the bottom edge of the
+    desktop sat 240px BELOW the smaller monitor, so somebody working on that
+    screen got a top edge, a right edge, and nothing else. Half a frame does
+    not read as a warning; it reads as a glitch.
+
+    So each monitor gets its own complete frame. Whichever screen the person is
+    looking at, the whole thing is around it.
+    """
+    gefunden = []
+    PROC = ctypes.WINFUNCTYPE(ctypes.c_int, w.HMONITOR, w.HDC,
+                              ctypes.POINTER(w.RECT), w.LPARAM)
+
+    def _cb(hmon, hdc, lprc, lp):
+        r = lprc.contents
+        gefunden.append((int(r.left), int(r.top),
+                         int(r.right - r.left), int(r.bottom - r.top)))
+        return 1
+
+    try:
+        user32.EnumDisplayMonitors(0, None, PROC(_cb), 0)
+    except Exception:
+        pass
+    return gefunden or [virtueller_bildschirm()]
+
+
+class Bar(object):
+    """One edge strip of one monitor, as its own click-through layered window."""
+
+    def __init__(self, seite, monitor=None):
         self.seite = seite
+        self.monitor = monitor          # (x, y, breite, hoehe) of ONE screen
         self.hwnd = None
         self.rect = (0, 0, 0, 0)
+        self.zwischenspeicher = None    # (schluessel, pixel)
 
     def erzeugen(self, hinst, klasse, proc):
         self.hwnd = user32.CreateWindowExW(
@@ -228,7 +265,7 @@ class Bar(object):
             0, 0, 10, 10, None, None, hinst, None)
 
     def platzieren_und_zeichnen(self, tiefe, staerke):
-        vx, vy, vw, vh = virtueller_bildschirm()
+        vx, vy, vw, vh = self.monitor or virtueller_bildschirm()
         dick = max(1, int(min(tiefe, MAX_DEPTH_WARN)))
         if self.seite == "top":
             x, y, cx, cy = vx, vy, vw, dick
@@ -239,7 +276,19 @@ class Bar(object):
         else:
             x, y, cx, cy = vx + vw - dick, vy, dick, vh
         self.rect = (x, y, cx, cy)
-        pixel = _bar_pixels(cx, cy, self.seite, tiefe, staerke)
+        # Building the pixels is the expensive part - the top bar of a 4K
+        # screen is nearly a megabyte, assembled in Python. During the one
+        # second of animation every frame differs and there is nothing to
+        # reuse; while the block is HELD nothing changes at all, and the same
+        # buffer is re-applied several times a second to keep the bar on
+        # screen. Without this cache that redraw would cost more than the
+        # animation it follows.
+        schluessel = (cx, cy, self.seite, int(tiefe), round(staerke, 3), _FARBE)
+        if self.zwischenspeicher and self.zwischenspeicher[0] == schluessel:
+            pixel = self.zwischenspeicher[1]
+        else:
+            pixel = _bar_pixels(cx, cy, self.seite, tiefe, staerke)
+            self.zwischenspeicher = (schluessel, pixel)
 
         kopf = BITMAPINFOHEADER()
         kopf.biSize = ctypes.sizeof(BITMAPINFOHEADER)
@@ -254,6 +303,17 @@ class Bar(object):
         if bmp:
             ctypes.memmove(bits, pixel, len(pixel))
             alt = gdi32.SelectObject(mdc, bmp)
+            # Being TOPMOST once is not being TOPMOST. Any other window that
+            # asks for topmost - a browser, a media player, an installer - is
+            # put above whoever asked earlier, and from then on the bar is
+            # behind a maximised window and invisible. Measured: the glow was
+            # there when the block began and gone a second or two later, which
+            # is worse than no glow at all, because the person learns the
+            # warning is unreliable. So the position is re-asserted on every
+            # redraw. NOACTIVATE and NOMOVE/NOSIZE: this changes z-order only,
+            # it never takes the foreground and never moves anything.
+            user32.SetWindowPos(self.hwnd, w.HWND(HWND_TOPMOST), 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
             blend = BLENDFUNCTION(0, 0, 255, 1)
             user32.UpdateLayeredWindow(
                 self.hwnd, sdc, ctypes.byref(w.POINT(x, y)),
@@ -430,13 +490,17 @@ class Guard(object):
     """The whole overlay: bars, animation, hooks, wait card."""
 
     def __init__(self):
-        self.bars = [Bar(s) for s in ("top", "bottom", "left", "right")]
+        self.monitore = monitore()
+        self.bars = [Bar(s, m) for m in self.monitore
+                     for s in ("top", "bottom", "left", "right")]
         self.zustand = "off"          # off warn hold release wait
         self.start = 0.0
         self.lock_seit = 0.0
         self.k_hook = None
         self.m_hook = None
         self.haken_wunsch = False     # what the protocol thread asked for
+        self.zuletzt_gemalt = 0.0     # when the held bar was last re-applied
+        self.sichtbar = False         # are the bars on screen at all
         self.haken_gemeldet = None    # what was last reported to the server
         self._kp = HOOKPROC(self._tasten)
         self._mp = HOOKPROC(self._maus)
@@ -534,6 +598,7 @@ class Guard(object):
 
     # ---- animation -------------------------------------------------------
     def _alle_zeigen(self, an):
+        self.sichtbar = bool(an)
         for b in self.bars:
             b.zeigen(an)
 
@@ -546,6 +611,13 @@ class Guard(object):
         # place a low-level hook may be installed or removed.
         self._haken_anwenden()
         jetzt = time.time()
+        # Nothing held, nothing announced - so nothing may be on screen. Found
+        # on a real desktop: an overlay left over from an earlier server sat
+        # with all four bars glowing and nothing holding. A glow that means
+        # nothing is worse than no glow, because the next real one means
+        # nothing either. Whatever path led there, this closes it.
+        if self.zustand == "off" and self.sichtbar:
+            self._alle_zeigen(False)
         t = (jetzt - self.start) * 1000.0
 
         if self.zustand == "warn":
@@ -576,7 +648,21 @@ class Guard(object):
                 self._zeichne(THICKNESS, 1.0 - f)
 
         elif self.zustand == "hold":
-            # steady; crash-watchdog only. If the server has gone silent - no
+            # Redraw, steadily, instead of drawing once and trusting it to
+            # stay. Measured on a real desktop: the bar appears when the block
+            # starts and is gone again within a second or two - the layered
+            # content does not survive whatever else is composing the screen.
+            # So for the entire time the person was actually locked out, there
+            # was nothing on screen at all: a red flash, then silence. That is
+            # the report "no blue fade came", and it was right.
+            #
+            # Every 200ms is invisible to a person and, with the pixel cache,
+            # costs four UpdateLayeredWindow calls - far less than one frame of
+            # the animation that precedes it.
+            if jetzt - self.zuletzt_gemalt > 0.2:
+                self.zuletzt_gemalt = jetzt
+                self._zeichne(THICKNESS, 1.0)
+            # crash-watchdog. If the server has gone silent - no
             # keepalive - for this long it has likely died, so release rather
             # than leave the user locked out. During real work the server's
             # keepalive keeps resetting lock_seit, so a long block is safe.

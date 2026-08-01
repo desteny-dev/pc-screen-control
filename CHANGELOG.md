@@ -1,5 +1,67 @@
 # Changelog
 
+## 1.4.0
+
+### Why this is 1.4.0 and not 1.3.5
+
+1.3.1 through 1.3.4 all shipped in a day, and at least two of them changed
+what the server *refuses* — new refusals are a change in behaviour, not a
+patch. Calling them patch releases was wrong, and it made a manual install
+cost more than the fix was worth. From here: **patch = fixes only; minor =
+any new refusal, tool, or reply field the caller must act on; and not more
+than one release a day unless something is actually costing somebody
+work.**
+
+### The guard could go missing and never come back
+
+Found on a real desktop. `_overlay_starten` returned the stored handle
+whenever it was not `None` — which is true of a **dead** process too. So the
+first time the overlay ended for any reason, every later command went into a
+pipe nobody was reading. The overlay is not decoration: the warning, the
+pulse, the notification **and the input hold** all live in it. Losing it once
+meant losing the guard for the rest of the server's life, silently. It is now
+restarted, restarts are counted, and if it will not stay up the guard says so
+instead of pretending.
+
+### A leftover overlay sat glowing with nothing held
+
+Also found on a real desktop: four bars visible, nothing holding, from an
+earlier server. A glow that means nothing is worse than no glow, because the
+next real one means nothing either. The overlay now hides anything on screen
+whenever its state is "off", whatever path led there.
+
+### The pulse only framed the desktop, not your screen
+
+The bars followed the virtual desktop — one box around *all* monitors.
+Measured here on two screens of different height: the bottom edge of the
+desktop sat 240px **below** the smaller monitor, so somebody working on that
+screen got a top edge, a right edge and nothing else. Half a frame reads as a
+glitch, not a warning. **Each monitor now gets its own complete frame.**
+
+The held bar is also re-drawn a few times a second and re-asserted as topmost,
+because being topmost once is not being topmost: any window that asks for it
+later goes above. The pixels are cached, so the redraw costs less than one
+frame of the animation before it.
+
+### Measured, so it is no longer a matter of opinion
+
+- **Pulse:** red `#EF4444` reaching ~200px inward at 800ms, snapping to blue
+  `#22D3EE` at 46px. Verified by reading screen pixels on all four edges of
+  both monitors, before, during and after.
+- **Notification:** appears.
+- **Input hold:** the overlay reports `hooks:1` on lock and `hooks:0` on
+  release.
+- **Stale-ref rescue:** `self_test` now reports `stale_ref_rescue` — runs,
+  nodes walked, seconds, worst run, how often the 4000-node limit was hit.
+  Whether that walk should become an index is a question for those numbers.
+
+### `wait` inside `batch` is now refused past 2 seconds
+
+The block is held for the whole batch, so a ten-second wait is ten seconds of
+somebody locked out of their own screen while nothing happens. It was written
+down as a rule, and rules that are only written down get broken. Short settles
+still pass — a window needs a beat to catch up.
+
 ## 1.3.4
 
 **The reader of these replies is a model with no memory of the machine between

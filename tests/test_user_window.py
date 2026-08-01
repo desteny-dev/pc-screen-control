@@ -328,6 +328,62 @@ pruefe("the dispatcher attaches it to every reply",
        "_lagebericht(" in quelle(server._handle))
 
 
+# ---------------------------------------------------------------------------
+print()
+print("11 - the guard cannot go missing, and cannot linger")
+
+q = quelle(server._overlay_starten)
+pruefe("a dead overlay is restarted, not returned as if alive",
+       "p.poll() is None" in q and 'gestorben' in q)
+pruefe("... and 'held' is forgotten when it dies", '"haelt"] = None' in q)
+pruefe("... and a restart loop gives up honestly",
+       '_OVERLAY["off"] = True' in q)
+
+with open(ov, encoding="utf-8") as fh:
+    o = fh.read()
+pruefe("nothing may be on screen when nothing is held",
+       'self.zustand == "off" and self.sichtbar' in o)
+pruefe("each monitor gets its own frame",
+       "def monitore(" in o and "Bar(s, m) for m in self.monitore" in o)
+pruefe("the held bar is redrawn, not drawn once and trusted",
+       "self.zuletzt_gemalt" in o)
+pruefe("topmost is re-asserted, because it does not stay",
+       "SetWindowPos(self.hwnd" in o and "HWND_TOPMOST" in o)
+pruefe("the pixels are cached so the redraw is cheap",
+       "zwischenspeicher" in o)
+
+
+# ---------------------------------------------------------------------------
+print()
+print("12 - nobody sits through a wait inside a batch")
+
+lang = server.t_batch({"steps": [{"tool": "wait", "args": {"seconds": 10}}]})
+pruefe("a 10s wait inside a batch is refused", lang["aborted"] is True)
+fehlertext = lang["results"][0].get("error", "")
+pruefe("... and says how long it would have cost them",
+       "10.0s of the person" in fehlertext)
+pruefe("... and says what to do instead", "set_guard block:'end'" in fehlertext)
+pruefe("the limit is short but not zero",
+       0 < server.WARTEN_IM_BATCH_MAX_S <= 3)
+
+
+# ---------------------------------------------------------------------------
+print()
+print("13 - the stale-ref rescue measures itself")
+
+vorher = dict(server._SPUR_KOSTEN)
+server._spur_messen(1200, 0.42, False)
+server._spur_messen(4000, 1.10, True)
+k = server._SPUR_KOSTEN
+pruefe("runs are counted", k["laeufe"] == vorher["laeufe"] + 2)
+pruefe("nodes are counted", k["knoten"] == vorher["knoten"] + 5200)
+pruefe("the worst single run is kept", k["schlimmster_lauf_s"] >= 1.1)
+pruefe("hitting the 4000 limit is counted",
+       k["grenze_erreicht"] == vorher["grenze_erreicht"] + 1)
+pruefe("self_test hands the numbers back",
+       "stale_ref_rescue" in quelle(server.t_self_test))
+
+
 print()
 print("=" * 74)
 print("NUTZERFENSTER:", "ALLES GRUEN" if not fehler
