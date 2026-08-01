@@ -336,6 +336,8 @@ q = quelle(server._overlay_starten)
 pruefe("a dead overlay is restarted, not returned as if alive",
        "p.poll() is None" in q and 'gestorben' in q)
 pruefe("... and 'held' is forgotten when it dies", '"haelt"] = None' in q)
+pruefe("... but not on every call - there is a cooldown",
+       "zuletzt_versucht" in q and "5.0" in q)
 pruefe("... and a restart loop gives up honestly",
        '_OVERLAY["off"] = True' in q)
 pruefe("... reported, not printed into a log nobody reads",

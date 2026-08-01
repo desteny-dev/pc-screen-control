@@ -1804,6 +1804,15 @@ def _overlay_starten():
     if p is not None and p.poll() is None:
         return p
     if p is not None:
+        import time as _t4
+        # A cooldown, because "restart it" and "restart it on every call" are
+        # not the same thing. On a machine where the overlay cannot run at all
+        # - a build agent, a session with no desktop - retrying per call would
+        # spawn a process per tool call and make everything slower while
+        # protecting nothing.
+        if _t4.time() - _OVERLAY.get("zuletzt_versucht", 0) < 5.0:
+            return None
+        _OVERLAY["zuletzt_versucht"] = _t4.time()
         _OVERLAY["gestorben"] = _OVERLAY.get("gestorben", 0) + 1
         _OVERLAY["proc"] = None
         _OVERLAY["haelt"] = None          # nothing is held until it says so
