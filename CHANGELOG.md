@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.1
+
+**Blind keystrokes now say when they missed.** The check that keeps typing out
+of the wrong window happens a moment before the keystrokes are sent, and those
+cannot be one instruction. On a shared screen that gap is real: seen once in
+live testing, a restore finished late, the check passed honestly — the target
+*was* in front — and the keys landed elsewhere a fraction of a second later.
+
+Nothing can be undone after the fact. What must not happen is silence about it,
+because the next thing an assistant does after an unnoticed miss is type more.
+So `send_keys` without a ref now compares where the keystrokes actually landed
+against the window it was working in, and when they differ it returns
+`off_target: true` with a warning that names both windows and says to stop,
+re-focus, and check whether anything needs undoing.
+
 ## 1.3.0
 
 ### Keystrokes can no longer land in the wrong window

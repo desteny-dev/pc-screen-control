@@ -49,7 +49,7 @@ body:
     attributes:
       label: Version of this server
       description: The number shown next to the extension in Claude, or from `initialize`.
-      placeholder: "1.3.0"
+      placeholder: "1.3.1"
     validations:
       required: true
 

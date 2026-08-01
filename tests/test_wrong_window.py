@@ -138,6 +138,20 @@ def main():
     check("and it returns for readers", "return" in vor.split("LESENDE_WERKZEUGE")[1][:60])
 
     print()
+    print("5b - if the focus moves between the check and the send, it says so")
+    # The check and the keystrokes cannot be one instruction. Seen in live
+    # testing: the check passed honestly - the target really was in front - and
+    # a late restore moved the focus before the keys arrived. Nothing can be
+    # undone afterwards; what must not happen is silence about it.
+    import inspect
+    sk = inspect.getsource(server.t_send_keys)
+    check("send_keys compares where it landed against the target",
+          "off_target" in sk)
+    check("and says not to keep typing", "Do not send more" in sk)
+    check("the warning names the window it should have gone to",
+          "_ZIEL" in sk.split("off_target")[1][:600])
+
+    print()
     print("6 - ending the block forgets the target")
     sg = server.t_set_guard
     import inspect

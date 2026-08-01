@@ -25,7 +25,7 @@ import io as _io
 import traceback
 
 SERVER_NAME = "pc-screen-control"
-SERVER_VERSION = "1.3.0"
+SERVER_VERSION = "1.3.1"
 PROTOCOL_VERSION = "2024-11-05"
 
 # MCP speaks UTF-8 in both directions. Windows does not: a pipe defaults to the
@@ -1070,13 +1070,35 @@ def t_send_keys(args):
     # window and the control that received it makes the mistake visible in the
     # very next line instead of hours later.
     wohin = _safe(_fokus_kennung)
-    fenster = _fenstertitel(_vordergrund())
-    return {"ok": True, "sent": args["keys"],
-            "landed_in_window": fenster or "?",
-            "landed_on": _beschreibe_fokus(wohin),
-            "note": "No ref was given, so this followed the keyboard focus. "
-                    "Check 'landed_in_window' and 'landed_on' above: if that is "
-                    "not what you meant, it went somewhere else."}
+    jetzt_h = _vordergrund()
+    fenster = _fenstertitel(jetzt_h)
+    erg = {"ok": True, "sent": args["keys"],
+           "landed_in_window": fenster or "?",
+           "landed_on": _beschreibe_fokus(wohin),
+           "note": "No ref was given, so this followed the keyboard focus. "
+                   "Check 'landed_in_window' and 'landed_on' above: if that is "
+                   "not what you meant, it went somewhere else."}
+
+    # The check before the keystrokes and the keystrokes themselves cannot be
+    # one instruction. The gap is small, but the screen is shared: a restore
+    # finishing late, or a window appearing, can move the focus inside it - and
+    # then the check passed honestly and the keys still went somewhere else.
+    # Seen once in testing, which is once more than never. Nothing can be undone
+    # afterwards, but silence is the part that makes it dangerous: say plainly
+    # that it landed off target, so the next step is a correction and not more
+    # typing into a stranger's window.
+    ziel = _ZIEL.get("hwnd") or 0
+    if ziel and jetzt_h and jetzt_h != ziel:
+        erg["off_target"] = True
+        erg["warning"] = (
+            "These keystrokes did NOT go to %r (handle %d), the window you were "
+            "working in - the focus moved between the check and the send, and "
+            "they landed in %r instead. Do not send more. Read the screen, "
+            "call focus_window on %d, and check whether anything has to be "
+            "undone in %r."
+            % (_ZIEL.get("titel") or "?", ziel, fenster or "?", ziel,
+               fenster or "?"))
+    return erg
 
 
 def t_menu(args):
