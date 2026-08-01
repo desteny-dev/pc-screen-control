@@ -201,6 +201,78 @@ pruefe("the dispatcher delivers it on failure too",
        haupt.count("_NACHHALL.popitem()") >= 2)
 
 
+# ---------------------------------------------------------------------------
+print()
+print("8 - ending a block says what actually came back")
+#
+# _RUECKGABE was written on every release and read by nobody: the server
+# measured whether it had given the screen back and then never said so. The
+# claim "your focus is restored is a measurement, not a promise" was true of
+# the measurement and false of the reporting, which is how a foreground that
+# never came back could keep happening without producing a single signal.
+
+g = quelle(server.t_set_guard)
+pruefe("block:'end' reads the measurement", "_RUECKGABE" in g)
+pruefe("... and reports it", "handed_back" in g)
+for feld in ("foreground_restored", "their_window", "in_front_now",
+             "caret_restored", "attempts"):
+    pruefe("  ... reports %s" % feld, feld in g)
+pruefe("says what to do when it did not come back",
+       "focus_window before doing anything else" in g)
+pruefe("watch mode is reported as deliberate, not as failure",
+       "watch_mode" in g and "deliberately" in g)
+pruefe("the window in front is measured, not deduced",
+       "foreground_now" in quelle(server._session_schliessen))
+
+
+# ---------------------------------------------------------------------------
+print()
+print("9 - the input hold is installed on the thread that can receive it")
+#
+# A low-level hook is delivered to the message queue of the thread that
+# INSTALLED it. The commands from the server arrive on the stdin thread, which
+# sits blocked in a read with no message loop - so hooks installed from there
+# are never dispatched and the person keeps their mouse and keyboard while the
+# server is certain it is holding them. Nothing fails and nothing is logged.
+#
+# Reported as "I could still move my mouse and type while you had my window".
+
+ov = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                  "src", "overlay.py")
+with open(ov, encoding="utf-8") as fh:
+    o = fh.read()
+
+pruefe("_haken_an only records a wish",
+       re.search(r"def _haken_an\(self\):\s*\n\s*self\.haken_wunsch = True", o)
+       is not None)
+pruefe("_haken_aus only records a wish",
+       re.search(r"def _haken_aus\(self\):\s*\n\s*self\.haken_wunsch = False", o)
+       is not None)
+pruefe("the hooks are applied from tick(), the message-loop thread",
+       re.search(r"def tick\(self\):\s*\n(\s*#[^\n]*\n)*\s*self\._haken_anwenden\(\)",
+                 o) is not None)
+anwenden = o[o.index("def _haken_anwenden"):]
+anwenden = anwenden[:anwenden.index("\n    def ", 10)]
+pruefe("both hooks are installed inside _haken_anwenden and nowhere else",
+       anwenden.count("SetWindowsHookExW(") == 2
+       and o.count("SetWindowsHookExW(") == 2,
+       "%d im Ganzen" % o.count("SetWindowsHookExW("))
+pruefe("a refused hook is written to stderr",
+       "input hooks REFUSED by Windows" in o)
+pruefe("the overlay reports the truth back to the server",
+       '_sende("hooks:1" if haelt else "hooks:0")' in o)
+pruefe("the hooks are taken down on the loop thread at exit",
+       re.search(r"guard\.off\(\)\s*\n(\s*#[^\n]*\n)*\s*guard\._haken_anwenden\(\)",
+                 o) is not None)
+
+pruefe("the server reads that report",
+       'wort.startswith("hooks:")' in quelle(server._overlay_lesen))
+g = quelle(server.t_set_guard)
+pruefe("block:'start' reports input_held", "input_held" in g)
+pruefe("... and warns loudly when it is not held",
+       "input_warning" in g and "NOT held" in g)
+
+
 print()
 print("=" * 74)
 print("NUTZERFENSTER:", "ALLES GRUEN" if not fehler

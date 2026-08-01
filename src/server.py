@@ -25,7 +25,7 @@ import io as _io
 import traceback
 
 SERVER_NAME = "pc-screen-control"
-SERVER_VERSION = "1.3.2"
+SERVER_VERSION = "1.3.3"
 PROTOCOL_VERSION = "2024-11-05"
 
 # MCP speaks UTF-8 in both directions. Windows does not: a pipe defaults to the
@@ -1748,7 +1748,7 @@ def t_clipboard(args):
 GUARD = {"priority": "claude", "idle_ms": 1500, "enabled": True}
 
 _OVERLAY = {"proc": None, "off": False, "tiefe": 0,
-            "abort": False, "go": False}
+            "abort": False, "go": False, "haelt": None}
 
 
 def _overlay_starten():
@@ -1785,6 +1785,11 @@ def _overlay_lesen():
             wort = zeile.strip().lower()
             if wort == "go":
                 _OVERLAY["go"] = True
+            elif wort.startswith("hooks:"):
+                # Whether the user's input is REALLY held, reported by the only
+                # process that can know. Before this the server announced a
+                # hold it had merely asked for.
+                _OVERLAY["haelt"] = wort.endswith("1")
     except Exception:
         pass
 
@@ -2453,6 +2458,12 @@ def _session_schliessen():
                 versuche += 1
             rueck["attempts"] = versuche
             rueck["home_title"] = (gesichert.get("titel") or "")[:120]
+            # Measured, not deduced: which window is actually in front now.
+            # "restored: true" answers whether the call succeeded; this answers
+            # where the person is looking, which is the question that matters
+            # and the one that was never asked.
+            rueck["foreground_now"] = _safe(
+                lambda: _fenstertitel(_vordergrund()), "") or ""
             if _SESSION.get("maus"):
                 _safe(lambda: _maus_zurueck(_SESSION["maus"]))
         _overlay_sagen("release")
@@ -3487,6 +3498,8 @@ def t_set_guard(args):
     guard off entirely. pause/stop/visible mirror the tray icon and are normally
     set by the user, not the assistant.
     """
+    rueckgabe = {}
+    gehalten = None
     if "priority" in args:
         p = args["priority"]
         if p not in ("claude", "me"):
@@ -3500,11 +3513,25 @@ def t_set_guard(args):
     if args.get("block") == "start":
         _session_oeffnen(args.get("message") or "working",
                          dauer=args.get("estimate_seconds"), explizit=True)
+        # Give the overlay a moment to install the hooks and say so, then
+        # report what is actually true rather than what was asked for.
+        import time as _t2
+        for _ in range(20):
+            if _OVERLAY.get("haelt") is not None:
+                break
+            _t2.sleep(0.02)
+        gehalten = _OVERLAY.get("haelt")
     elif args.get("block") == "end":
         _session_schliessen()
         # The block is over, so the declared target is over with it. Keeping it
         # would refuse the next, unrelated piece of work for no reason.
         _ziel_vergessen()
+        # What actually came back, measured. This used to be written into
+        # _RUECKGABE and read by nobody: the server knew whether it had given
+        # the screen back and never said. That is why "my window ends up
+        # behind" could keep happening without ever producing a signal - and
+        # why the answer to "did it work" was an assumption on both sides.
+        rueckgabe = dict(_RUECKGABE)
 
     if args.get("await_user"):
         # The assistant needs the USER to do something it must not do itself -
@@ -3524,15 +3551,43 @@ def t_set_guard(args):
     if "visible" in args:
         _STEUER["sichtbar"] = bool(args["visible"])
 
-    return {"ok": True, "guard": dict(GUARD),
-            "session_open": _SESSION["offen"],
-            "controls": dict(_STEUER),
-            "note": ("Claude announces and takes over; your input is held and "
-                     "your focus restored afterwards."
-                     if GUARD["priority"] == "claude" and GUARD["enabled"] else
-                     "Your input has priority; Claude waits for your go."
-                     if GUARD["enabled"] else
-                     "Guard off; coordinate actions run without a pause.")}
+    erg = {"ok": True, "guard": dict(GUARD),
+           "session_open": _SESSION["offen"],
+           "controls": dict(_STEUER)}
+    if gehalten is not None:
+        erg["input_held"] = bool(gehalten)
+        if not gehalten:
+            erg["input_warning"] = (
+                "The block is open, but the person's keyboard and mouse are "
+                "NOT held - Windows refused the input hooks. They can type and "
+                "click into whatever you are working in, at any moment. Treat "
+                "this as a shared screen: never send keystrokes without a ref, "
+                "keep the block short, and tell them the guard is not holding.")
+    if rueckgabe:
+        erg["handed_back"] = {
+            "foreground_restored": bool(rueckgabe.get("window")),
+            "their_window": rueckgabe.get("home_title") or "",
+            "in_front_now": rueckgabe.get("foreground_now") or "",
+            "caret_restored": bool(rueckgabe.get("control")),
+            "attempts": rueckgabe.get("attempts"),
+        }
+        if rueckgabe.get("watching"):
+            erg["handed_back"]["watch_mode"] = True
+            erg["handed_back"]["note"] = (
+                "Watch mode is on, so the person's window was deliberately "
+                "NOT put back in front - they asked to see the work.")
+        elif not rueckgabe.get("window"):
+            erg["handed_back"]["note"] = (
+                "Their window did NOT come back to the front. Fix it with "
+                "focus_window before doing anything else - they are looking "
+                "at whatever you raised.")
+    erg["note"] = ("Claude announces and takes over; your input is held and "
+                   "your focus restored afterwards."
+                   if GUARD["priority"] == "claude" and GUARD["enabled"] else
+                   "Your input has priority; Claude waits for your go."
+                   if GUARD["enabled"] else
+                   "Guard off; coordinate actions run without a pause.")
+    return erg
 
 
 S = {"type": "string"}

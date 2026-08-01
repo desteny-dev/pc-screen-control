@@ -436,6 +436,8 @@ class Guard(object):
         self.lock_seit = 0.0
         self.k_hook = None
         self.m_hook = None
+        self.haken_wunsch = False     # what the protocol thread asked for
+        self.haken_gemeldet = None    # what was last reported to the server
         self._kp = HOOKPROC(self._tasten)
         self._mp = HOOKPROC(self._maus)
         self._wndproc = WNDPROC(_tray_wndproc)
@@ -472,20 +474,53 @@ class Guard(object):
                 return 1                            # swallow real click/move
         return user32.CallNextHookEx(None, code, wparam, lparam)
 
+    # A low-level hook is delivered to the message queue of the thread that
+    # INSTALLED it. The commands from the server arrive on the stdin thread,
+    # and that thread sits blocked in a read with no message loop at all - so
+    # hooks installed from there are never dispatched, Windows drops them after
+    # LowLevelHooksTimeout, and the person keeps their mouse and keyboard while
+    # the server is certain it is holding them. Nothing fails, nothing is
+    # logged: the guard simply is not there.
+    #
+    # Reported as "I could still move my mouse and type while you had my
+    # window", and it is the reason that report was possible at all.
+    #
+    # So these two only record a wish. The message loop applies it in tick(),
+    # which is the one thread with a loop - and that is also the thread the
+    # callbacks have to arrive on.
     def _haken_an(self):
-        if self.k_hook:
-            return
-        hmod = kernel32.GetModuleHandleW(None)
-        self.k_hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, self._kp, hmod, 0)
-        self.m_hook = user32.SetWindowsHookExW(WH_MOUSE_LL, self._mp, hmod, 0)
+        self.haken_wunsch = True
 
     def _haken_aus(self):
-        if self.k_hook:
-            user32.UnhookWindowsHookEx(self.k_hook)
-            self.k_hook = None
-        if self.m_hook:
-            user32.UnhookWindowsHookEx(self.m_hook)
-            self.m_hook = None
+        self.haken_wunsch = False
+
+    def _haken_anwenden(self):
+        """Runs on the message-loop thread only. Installs or removes the hooks
+        and tells the server what really happened - a guard that cannot say
+        whether it is on is a guard nobody can trust."""
+        if self.haken_wunsch and not self.k_hook:
+            hmod = kernel32.GetModuleHandleW(None)
+            self.k_hook = user32.SetWindowsHookExW(
+                WH_KEYBOARD_LL, self._kp, hmod, 0) or None
+            self.m_hook = user32.SetWindowsHookExW(
+                WH_MOUSE_LL, self._mp, hmod, 0) or None
+        elif not self.haken_wunsch and (self.k_hook or self.m_hook):
+            if self.k_hook:
+                user32.UnhookWindowsHookEx(self.k_hook)
+                self.k_hook = None
+            if self.m_hook:
+                user32.UnhookWindowsHookEx(self.m_hook)
+                self.m_hook = None
+
+        haelt = bool(self.k_hook and self.m_hook)
+        if haelt != self.haken_gemeldet:
+            self.haken_gemeldet = haelt
+            _sende("hooks:1" if haelt else "hooks:0")
+            if self.haken_wunsch and not haelt:
+                sys.stderr.write(
+                    "[overlay] input hooks REFUSED by Windows - the user's "
+                    "input is NOT held\n")
+                sys.stderr.flush()
 
     # ---- wait card (drawn on the bottom bar area) ------------------------
     def _karte_rect(self):
@@ -507,6 +542,9 @@ class Guard(object):
             b.platzieren_und_zeichnen(tiefe, staerke)
 
     def tick(self):
+        # First, always: this is the message-loop thread, so it is the only
+        # place a low-level hook may be installed or removed.
+        self._haken_anwenden()
         jetzt = time.time()
         t = (jetzt - self.start) * 1000.0
 
@@ -673,6 +711,9 @@ def main():
         user32.TranslateMessage(ctypes.byref(msg))
         user32.DispatchMessageW(ctypes.byref(msg))
     guard.off()
+    # Still on the message-loop thread here, so this is the right place - and
+    # the only place - to actually take the hooks down before exiting.
+    guard._haken_anwenden()
     _tray_entfernen()
 
 

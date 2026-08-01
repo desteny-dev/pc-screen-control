@@ -6,7 +6,7 @@
 
 ## Start here
 
-**Current state:** v1.3.2 is released. 34 tools, 18 test files in CI on Python
+**Current state:** v1.3.3 is released. 34 tools, 18 test files in CI on Python
 3.9 / 3.11 / 3.13, all green. Two packages ship: `.mcpb` for Claude Desktop and
 `.zip` with a setup script for ChatGPT desktop, Codex, Cursor, VS Code, Cline
 and Zed — same server inside both.
@@ -33,6 +33,13 @@ now refused, an ambiguous title is refused rather than guessed for anything
 destructive, `Alt+F4`/`Ctrl+W` without a ref is refused, and a foreground that
 did not come back is reported on the next call whatever tool that is
 (`tests/test_user_window.py`).
+
+1.3.3 — and then a live test of 1.3.2 showed the sharpest version of the same
+mistake: the release *measured* whether it had given the screen back, wrote the
+result into `_RUECKGABE`, and **nothing ever read it**. A comment said tools
+copy it into their reply; none did. `set_guard block:'end'` now returns
+`handed_back`, including `in_front_now` — what is actually in front, measured
+after the restore, as opposed to whether the call returned true.
 
 **The pattern worth carrying forward:** every one of these was a case where the
 code was internally consistent and still wrong, because the question it asked

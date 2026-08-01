@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.3.3
+
+### The input hold was never actually on
+
+Reported in one sentence, and it undoes an assumption the whole design rested
+on: *"I could still move my mouse and type while you had my window."*
+
+A low-level hook is delivered to the **message queue of the thread that
+installed it**. The commands from the server arrive on the overlay's stdin
+thread — and that thread sits blocked in a read, with no message loop at all.
+So `SetWindowsHookEx` succeeded, returned a valid handle, and the callbacks
+were never dispatched. Windows drops such a hook after `LowLevelHooksTimeout`
+and says nothing.
+
+Nothing failed. Nothing was logged. `self_test` reported the overlay as
+present, because it checked that the *file* existed. The pulse drew, the
+notification appeared, the block opened and closed — and the person's keyboard
+and mouse were free the entire time, while every layer above was certain they
+were held.
+
+**The fix is one line of architecture:** the protocol thread now only records a
+wish, and `tick()` — which runs on the message-loop thread, the one thread that
+can receive the callbacks — installs and removes the hooks. That is also the
+thread the callbacks have to arrive on, so it is the only correct place.
+
+**And it now says so.** The overlay reports `hooks:1` / `hooks:0` back to the
+server, and `set_guard block:'start'` returns `input_held`. When Windows
+refuses the hooks, the reply says the screen is shared and to behave
+accordingly, instead of promising a hold that is not there.
+
+*This is the third defect in this project found by the same rule: a function
+that does not report whether it worked will eventually stop working, and nobody
+will notice.*
+
+### The server measured whether it gave the screen back, and then never said so
+Found by testing 1.3.2 on a live desktop: after a block ended, the foreground
+was a different window than expected — and there was no way to tell from the
+outside whether that was correct or a failure.
+
+The release wrote its result into `_RUECKGABE` on every block, with a comment
+saying tools copy it into their reply. Nothing did. The claim *"your focus is
+restored is a measurement, not a promise"* was true of the measurement and
+false of the reporting, which is exactly how a foreground that never came back
+could keep happening without producing a single signal.
+
+`set_guard block:'end'` now returns `handed_back`:
+
+| field | |
+|---|---|
+| `foreground_restored` | did the call succeed |
+| `their_window` | the window this block owed them |
+| `in_front_now` | what is **actually** in front, measured after the restore |
+| `caret_restored` | did the text cursor come back with it |
+| `attempts` | how many tries it took |
+
+`in_front_now` is the one that matters. `foreground_restored` answers whether
+the call worked; `in_front_now` answers where the person is looking, which is
+the question that was never being asked.
+
 ## 1.3.2
 
 **The window you were in is no longer something this can make disappear.**
