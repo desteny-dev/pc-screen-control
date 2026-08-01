@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.4.1
+
+**The stop button did not work while the screen was held.**
+
+The tray menu is the only way to pause or stop a takeover from outside. The
+code said a takeover could not lock anyone out of it, and gave a reason:
+
+> *the tray icon and its menu are a normal window, not part of the swallowed
+> input.*
+
+That reasoning is wrong. **A low-level mouse hook intercepts input before any
+window sees it** — being a normal window has nothing to do with it. So while a
+block was held, a real click on the tray icon was swallowed like every other
+click, and Pause and Stop were unreachable during the only moments they exist
+for. The emergency brake did not work while the car was moving.
+
+The taskbar is now carved out of the swallowing, and so is the whole screen
+while the menu is open — including the keyboard, so the menu can be driven with
+arrow keys and Enter. The taskbar's position is re-read once a second, because
+it can move or auto-hide.
+
+*Found while checking the last open item on the list rather than by anything
+going wrong — which is the point of having the list.*
+
 ## 1.4.0
 
 ### Why this is 1.4.0 and not 1.3.5

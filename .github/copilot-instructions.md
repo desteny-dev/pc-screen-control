@@ -6,7 +6,7 @@
 
 ## Start here
 
-**Current state:** v1.4.0 is released. 34 tools, 18 test files in CI on Python
+**Current state:** v1.4.1 is released. 34 tools, 18 test files in CI on Python
 3.9 / 3.11 / 3.13, all green. Two packages ship: `.mcpb` for Claude Desktop and
 `.zip` with a setup script for ChatGPT desktop, Codex, Cursor, VS Code, Cline
 and Zed — same server inside both.
@@ -108,11 +108,13 @@ tried and rejected with reasons recorded there.
 Everything below is unclaimed and worth doing. Nothing here is on the Version 1
 checklist — that one is finished.
 
-**1. The tray icon's controls have never been clicked while input is held.**
-The icon appears and the menu is written; the state machine is tested headless
-in `tests/test_session.py`. What is still unmeasured is the part that matters:
-Pause, Stop and Watch must stay clickable *while the guard is swallowing the
-mouse*, or they are decoration. That needs a hand on a real mouse.
+**1. Confirm by hand that the tray menu now opens during a held block.**
+It could not before 1.4.1: the mouse hook swallowed the click before the icon
+ever saw it, so Pause and Stop were unreachable during the only moments they
+exist for. The taskbar is now carved out of the swallowing and the code path is
+covered in `tests/test_user_window.py` section 14 - but "a human clicked it
+mid-takeover and the menu opened" is still unmeasured, and it is the one claim
+that matters most. **Needs a hand on a real mouse.**
 
 **2. macOS.** `docs/PORTING.md` maps every pattern used here onto the
 Accessibility API. That map has never been compiled. The guard is the harder

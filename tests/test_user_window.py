@@ -391,6 +391,47 @@ pruefe("self_test hands the numbers back",
        "stale_ref_rescue" in quelle(server.t_self_test))
 
 
+# ---------------------------------------------------------------------------
+print()
+print("14 - the way out stays open while the screen is held")
+#
+# The tray menu is the only stop button. The code said a takeover could not
+# lock somebody out of it, because "the tray icon and its menu are a normal
+# window, not part of the swallowed input". That reasoning is wrong: a
+# low-level mouse hook intercepts input BEFORE any window sees it. So while a
+# block was held, a real click on the tray was swallowed like every other
+# click, and Pause and Stop were unreachable during the only moments they
+# exist for.
+
+with open(ov, encoding="utf-8") as fh:
+    o = fh.read()
+
+pruefe("the taskbar is carved out of the swallowing",
+       "_im_rect(_taskleiste_rect()" in o)
+pruefe("... and the whole screen while the menu is open",
+       '_MENUE["offen"] or _im_rect' in o)
+pruefe("the keyboard reaches an open menu too",
+       'not eigen and not _MENUE["offen"]' in o)
+pruefe("the flag is set for as long as the menu runs",
+       re.search(r'_MENUE\["offen"\] = True.*?finally:.*?'
+                 r'_MENUE\["offen"\] = False', o, re.S) is not None)
+pruefe("the taskbar position is re-read, not cached forever",
+       'jetzt - _TASKLEISTE["geprueft"] < 1.0' in o)
+pruefe("the wrong reason is gone from the comment",
+       "not part of the swallowed input.\n" not in o
+       or "That reasoning was wrong" in o)
+
+def _im_rect(rect, x, y):
+    return bool(rect) and rect[0] <= x < rect[2] and rect[1] <= y < rect[3]
+
+
+pruefe("_im_rect: inside is inside", _im_rect((0, 2088, 3840, 2160), 100, 2100))
+pruefe("_im_rect: outside is outside",
+       not _im_rect((0, 2088, 3840, 2160), 100, 500))
+pruefe("_im_rect: no taskbar found means nothing is carved out",
+       not _im_rect(None, 100, 2100))
+
+
 print()
 print("=" * 74)
 print("NUTZERFENSTER:", "ALLES GRUEN" if not fehler

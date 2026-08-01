@@ -151,6 +151,10 @@ def _declare():
                                     ctypes.c_int, ctypes.c_int, ctypes.c_uint]
     user32.SetWindowPos.restype = w.BOOL
     user32.GetCursorPos.argtypes = [ctypes.POINTER(w.POINT)]
+    user32.FindWindowW.restype = w.HWND
+    user32.FindWindowW.argtypes = [w.LPCWSTR, w.LPCWSTR]
+    user32.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user32.GetWindowRect.restype = w.BOOL
     gdi32.CreateCompatibleDC.restype = w.HDC
     gdi32.CreateCompatibleDC.argtypes = [w.HDC]
     gdi32.CreateDIBSection.restype = w.HBITMAP
@@ -421,9 +425,47 @@ def _tray_entfernen():
 # ---- tray menu: pause / stop, written to mode.json for the server ----------
 # Right-clicking the tray icon opens a tiny menu. Its choices are written to
 # mode.json, which the server reads before every action - so pause and stop
-# reach the assistant through a plain local file, no socket. This is also why a
-# takeover cannot lock the user out of the controls: the tray icon and its menu
-# are a normal window, not part of the swallowed input.
+# reach the assistant through a plain local file, no socket.
+#
+# This used to end with "and that is why a takeover cannot lock the user out of
+# the controls: the tray icon and its menu are a normal window, not part of the
+# swallowed input." That reasoning was wrong, and wrong in the worst possible
+# place. A low-level mouse hook intercepts input BEFORE any window sees it -
+# being a normal window has nothing to do with it. So while a block was held,
+# a real click on the tray icon was swallowed like every other click, and Pause
+# and Stop were unreachable during the only moments they exist for. The
+# emergency brake did not work while the car was moving.
+#
+# Now the taskbar is carved out of the swallowing, and so is the whole screen
+# while the menu is open. The risk is small and worth it by a wide margin: the
+# taskbar is not where the assistant works, and someone reaching for the tray
+# during a takeover is trying to stop it.
+_TASKLEISTE = {"rect": None, "geprueft": 0.0}
+_MENUE = {"offen": False}
+
+
+def _im_rect(rect, x, y):
+    return bool(rect) and rect[0] <= x < rect[2] and rect[1] <= y < rect[3]
+
+
+def _taskleiste_rect():
+    """Where the taskbar is, refreshed now and then - it can move or hide."""
+    import time as _t
+    jetzt = _t.time()
+    if _TASKLEISTE["rect"] is not None and jetzt - _TASKLEISTE["geprueft"] < 1.0:
+        return _TASKLEISTE["rect"]
+    _TASKLEISTE["geprueft"] = jetzt
+    try:
+        h = user32.FindWindowW("Shell_TrayWnd", None)
+        if h:
+            r = w.RECT()
+            if user32.GetWindowRect(h, ctypes.byref(r)):
+                _TASKLEISTE["rect"] = (r.left, r.top, r.right, r.bottom)
+                return _TASKLEISTE["rect"]
+    except Exception:
+        pass
+    _TASKLEISTE["rect"] = None
+    return None
 WM_RBUTTONUP = 0x0205
 WM_CONTEXTMENU = 0x007B
 MF_STRING = 0x0000
@@ -462,8 +504,14 @@ def _menu_zeigen(hwnd):
         pt = w.POINT()
         user32.GetCursorPos(ctypes.byref(pt))
         user32.SetForegroundWindow(hwnd)     # so the menu closes on an outside click
-        cmd = user32.TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD,
-                                    pt.x, pt.y, 0, hwnd, None)
+        # TrackPopupMenu does not return until the menu closes, and it runs its
+        # own message loop. Real input has to reach it for that whole time.
+        _MENUE["offen"] = True
+        try:
+            cmd = user32.TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                                        pt.x, pt.y, 0, hwnd, None)
+        finally:
+            _MENUE["offen"] = False
         user32.DestroyMenu(menu)
         if cmd == ID_PAUSE:
             p["pause"] = not p["pause"]
@@ -520,8 +568,9 @@ class Guard(object):
             # Escape is no longer special. A stray Esc must not cancel the
             # assistant, so while input is held it is swallowed like any other
             # real key; the assistant's own injected keys still pass. Pause and
-            # stop live in the tray icon, not on a keystroke.
-            if self._gesperrt() and not eigen:
+            # stop live in the tray icon, not on a keystroke - but once that
+            # menu is open it has to be usable, arrow keys and Enter included.
+            if self._gesperrt() and not eigen and not _MENUE["offen"]:
                 return 1                            # swallow real keystroke
         return user32.CallNextHookEx(None, code, wparam, lparam)
 
@@ -535,6 +584,13 @@ class Guard(object):
                 _sende("go")
                 return 1
             if self._gesperrt() and not eigen:
+                # The way out stays open. Everything else on screen is held,
+                # but the taskbar - and the whole screen while the tray menu is
+                # up - has to keep taking real clicks, or Pause and Stop exist
+                # only on paper.
+                if _MENUE["offen"] or _im_rect(_taskleiste_rect(),
+                                               d.pt.x, d.pt.y):
+                    return user32.CallNextHookEx(None, code, wparam, lparam)
                 return 1                            # swallow real click/move
         return user32.CallNextHookEx(None, code, wparam, lparam)
 
