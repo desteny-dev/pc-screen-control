@@ -25,7 +25,7 @@ import io as _io
 import traceback
 
 SERVER_NAME = "pc-screen-control"
-SERVER_VERSION = "1.4.1"
+SERVER_VERSION = "1.4.2"
 PROTOCOL_VERSION = "2024-11-05"
 
 # MCP speaks UTF-8 in both directions. Windows does not: a pipe defaults to the
@@ -337,7 +337,11 @@ WARTEN_IM_BATCH_MAX_S = 2.0
 
 # What the stale-ref rescue actually costs, measured rather than assumed.
 _SPUR_KOSTEN = {"laeufe": 0, "knoten": 0, "sekunden": 0.0,
-                "schlimmster_lauf_s": 0.0, "grenze_erreicht": 0}
+                "schlimmster_lauf_s": 0.0, "grenze_erreicht": 0,
+                # Whether the LAST search ran out of budget. A rescue that was
+                # cut off short is not the same answer as "it is not there",
+                # and the caller has to be able to tell them apart.
+                "letzte_grenze": 0}
 
 
 def _spur_messen(knoten, dauer, an_der_grenze):
@@ -346,31 +350,91 @@ def _spur_messen(knoten, dauer, an_der_grenze):
     _SPUR_KOSTEN["sekunden"] += dauer
     _SPUR_KOSTEN["schlimmster_lauf_s"] = max(
         _SPUR_KOSTEN["schlimmster_lauf_s"], round(dauer, 3))
+    _SPUR_KOSTEN["letzte_grenze"] = knoten if an_der_grenze else 0
     if an_der_grenze:
         _SPUR_KOSTEN["grenze_erreicht"] += 1
 
 
-def _spur_suchen(hwnd, spur, grenze=4000):
+def _uia_suchen(hwnd, aid):
+    """Ask Windows to find the element, instead of walking to it ourselves.
+
+    UI Automation can run a search inside the application that owns the window,
+    across the whole subtree, in one call. Walking the tree from here costs a
+    COM round trip per node - measured at ~2700 nodes a second, which is why
+    the Python walk needed a 4000-node cap and why it never finished on a big
+    Electron window at all.
+
+    Returns None on anything unexpected, and the caller falls back to walking.
+    Nothing here is required to work; it is only allowed to be fast.
+    """
+    if not aid:
+        return None
+    # uiautomation keeps the COM client in a private class that is not
+    # re-exported at package level, and where it lives has moved between
+    # versions. Look in the places it has been, and give up quietly if it is
+    # in none of them - this is an optimisation, not a dependency.
+    import sys as _s
+    klient = None
+    for wo in (auto, _s.modules.get("uiautomation.uiautomation"),
+               getattr(auto, "uiautomation", None)):
+        k = getattr(wo, "_AutomationClient", None) if wo is not None else None
+        if k is not None:
+            klient = k.instance()
+            break
+    if klient is None:
+        return None
+    wurzel = auto.ControlFromHandle(int(hwnd))
+    if wurzel is None:
+        return None
+    bedingung = klient.IUIAutomation.CreatePropertyCondition(
+        30011, aid)                       # UIA_AutomationIdPropertyId
+    treffer = wurzel.Element.FindFirst(4, bedingung)   # TreeScope_Subtree
+    if not treffer:
+        return None
+    return auto.Control.CreateControlFromElement(treffer)
+
+
+def _spur_suchen_nur_lauf(hwnd, spur, grenze=4000):
+    """Nur zum Messen: derselbe Lauf ohne die UIA-Abkuerzung."""
+    return _spur_suchen(hwnd, spur, grenze, ohne_uia=True)
+
+
+def _spur_suchen(hwnd, spur, grenze=4000, ohne_uia=False):
     """Find the element a stale ref used to mean, by what it was.
 
-    This walks up to `grenze` nodes, and it runs on the failure path - where
-    things are already going wrong and a person is already waiting. Whether
-    that walk is worth replacing with an index built during the tree read is a
-    question nobody here could answer, because nobody had ever measured it. So
-    it measures itself now: how many nodes, how long, and whether it hit the
-    limit. The numbers come back in self_test, and the decision can be made
-    from data instead of from a feeling that 4000 sounds like a lot."""
+    Measured before it was changed, on real windows: the walk manages about
+    2700 nodes a second, and on the two biggest windows open at the time - both
+    Electron - it ran into the 4000-node cap after 1.5 seconds and returned
+    nothing. So on exactly the windows where trees are largest and re-renders
+    most common, the rescue was both the slowest and the least likely to work.
+    That is the real cost, and it is not the seconds.
+
+    So the search is asked of UI Automation first, which runs it inside the
+    application in one call. The walk stays as the fallback for elements with
+    no automation id, and it is breadth-first now: a re-rendered control is
+    usually near where it was, and depth-first sank into one branch and spent
+    the whole budget there.
+    """
     import time as _t
     begonnen = _t.time()
     art, aid, name, cls = spur
+
+    if aid and not ohne_uia:
+        gefunden = _safe(lambda: _uia_suchen(hwnd, aid))
+        if gefunden is not None:
+            _spur_messen(0, _t.time() - begonnen, False)
+            return gefunden
     wurzel = _safe(lambda: auto.ControlFromHandle(int(hwnd)))
     if wurzel is None:
         return None
     bester = None
-    stapel = [(wurzel, 0)]
+    # Breadth-first. Depth-first spent the whole budget on the first deep
+    # branch it happened to enter; a control that moved in a re-render is
+    # almost always still near where it was.
+    stapel = _collections.deque([(wurzel, 0)])
     gesehen = 0
     while stapel and gesehen < grenze:
-        el, tiefe = stapel.pop()
+        el, tiefe = stapel.popleft()
         gesehen += 1
         e_aid = _safe(lambda: el.AutomationId, "") or ""
         e_art = _safe(lambda: el.ControlTypeName, "") or ""
@@ -586,7 +650,12 @@ def _resolve(ref):
         if treffer is None:
             raise ValueError(
                 "Ref %r is stale and the control it named could not be found "
-                "again - re-read the tree." % ref)
+                "again%s - re-read the tree." % (
+                    ref,
+                    ", and the search was cut off at %d nodes before it could "
+                    "look everywhere, so it may still be there" % _SPUR_KOSTEN[
+                        "letzte_grenze"] if _SPUR_KOSTEN.get(
+                        "letzte_grenze") else ""))
         _spur_merken(str(ref), treffer)
     return treffer
 

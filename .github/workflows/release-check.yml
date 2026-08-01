@@ -83,6 +83,29 @@ jobs:
               p("the version inside matches the tag",
                 tag.lstrip("v") == version, "%s vs %s" % (tag, version))
 
+              # The one promise worth re-proving on the shipped file itself.
+              #
+              # This workflow reaches the network - it has to, it is comparing
+              # a published download against published source. That is a fair
+              # thing to be suspicious of, so it ends by proving the opposite
+              # about the only code that matters: nothing a person installs
+              # can open a connection. Checked on the bytes inside the
+              # package, not on the repository, because the package is what
+              # runs on their machine.
+              verboten = ("socket", "urllib", "httplib", "http.client",
+                          "requests", "ssl", "ftplib", "telnetlib",
+                          "smtplib", "xmlrpc", "asyncio")
+              for datei in namen_im_paket:
+                  if not datei.endswith(".py") or datei.startswith("lib/"):
+                      continue
+                  quelltext = paket.read(datei).decode("utf-8", "replace")
+                  importe = re.findall(r"^\s*(?:import|from)\s+([\w.]+)",
+                                       quelltext, re.M)
+                  schlimm = sorted({i for i in importe
+                                    if i.split(".")[0] in verboten})
+                  p("%s imports nothing that can reach the network" % datei,
+                    not schlimm, ", ".join(schlimm))
+
           changelog = hole("%s/%s/CHANGELOG.md" % (roh, tag))
           p("the changelog opens with this version",
             bool(re.search(r"^##\s*" + re.escape(tag.lstrip("v")),

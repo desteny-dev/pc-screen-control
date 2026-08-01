@@ -57,12 +57,27 @@ protection.
     - starting it and driving it opens zero sockets, watched by a tripwire in
       the test.
 
-  Checking for a newer version is a **separate** program,
-  `scripts/CHECK-FOR-UPDATES`, which a person runs by hand — the server neither
-  offers nor triggers it, so there is no path by which the thing driving your
-  mouse can reach the internet on its own. The updater, when *you* run it, asks
-  GitHub's public release API, and downloads a new version only after you say
-  yes and only after verifying its SHA-256 against the release notes.
+### Where the line is drawn, exactly
+
+Two files in this repository **do** use the network. Neither is in the download,
+and it is worth being precise about that rather than letting "no network" do
+work it cannot do:
+
+| | what it does | where it runs |
+|---|---|---|
+| `scripts/CHECK-FOR-UPDATES` | asks GitHub's public release API whether a newer version exists; downloads one **only** after you say yes, and **only** after its SHA-256 matches the release notes | on your machine — **when you start it**, never on its own |
+| `.github/workflows/release-check.yml` | fetches a published release and compares it byte for byte with the source at its tag | on **GitHub's** machines, when a release is published |
+
+Neither ships. The extension you install contains `server.py`, `overlay.py`,
+`manifest.json`, `requirements.txt` and a `lib/` folder — that is all, and you
+can list it yourself: a `.mcpb` is a zip.
+
+And because the second of those two is a workflow that reaches the network, it
+finishes by **proving the opposite about the file you actually install**: it
+reads every Python file inside the published package and fails the release if
+any of them imports `socket`, `urllib`, `http`, `ssl`, `requests` or anything
+else that could open a connection. The check runs on the shipped bytes, not on
+the repository — because the package is what runs on your machine.
 - **`launch_app` is not a general shell.** It starts a named program or opens a
   file. A command carrying shell operators (`&`, `|`, `>` …), invoking a
   scripting host (`cmd`, `powershell`, `wscript` …), or opening a URL is

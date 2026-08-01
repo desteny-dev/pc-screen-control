@@ -6,7 +6,7 @@
 
 ## Start here
 
-**Current state:** v1.4.1 is released. 34 tools, 18 test files in CI on Python
+**Current state:** v1.4.2 is released. 34 tools, 18 test files in CI on Python
 3.9 / 3.11 / 3.13, all green. Two packages ship: `.mcpb` for Claude Desktop and
 `.zip` with a setup script for ChatGPT desktop, Codex, Cursor, VS Code, Cline
 and Zed — same server inside both.
@@ -121,12 +121,22 @@ Accessibility API. That map has never been compiled. The guard is the harder
 half: macOS has no `WH_KEYBOARD_LL`, and holding input needs an Accessibility
 permission the user grants explicitly.
 
-**3. `_spur_suchen` — decide it from the numbers now.**
-The 4000-node rescue walk measures itself since 1.4.0 and `self_test` reports
-`stale_ref_rescue`: runs, nodes, seconds, worst run, and how often the limit
-was hit. If the worst run is milliseconds, leave it alone. If it is not, an
-automation-id index built during the tree read makes it O(1). **Do not touch
-this without pasting the numbers.**
+**3. Closed in 1.4.2 — kept here as the worked example.**
+The rescue walk was measured, found to cost 1.278s on an Electron window, and
+replaced by asking UI Automation to search inside the application: 0.013s, same
+answer. The miss case got ~5% slower and that was the right trade.
+
+Worth reading before the next optimisation: **the first implementation was
+silently broken**, measured as "no improvement at all", and was one sentence
+away from being reverted as a bad idea. `_AutomationClient` is not exported at
+uiautomation's package level; the call raised, `_safe` swallowed it, and the
+fallback produced identical timings. *Measuring the idea and measuring your own
+typo look exactly the same from the outside.* When a change measures as doing
+nothing, check that it ran.
+
+*Closed in 1.4.1:* the tray menu was unreachable while input was held - a
+low-level hook takes the click before any window sees it, so the stop button
+did not work while the screen was held.
 
 *Closed in 1.4.0, all by measurement on a real desktop, not by reasoning:* the
 pulse and the notification (pixels read on every edge of both monitors); the

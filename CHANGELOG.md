@@ -1,5 +1,57 @@
 # Changelog
 
+## 1.4.2
+
+### Finding a control again after the page moved: 98x faster where it matters
+
+The rescue that re-finds an element after a re-render walked the window's tree
+from Python, one COM round trip per node. 1.4.0 made it measure itself; these
+are the numbers it produced on real windows:
+
+| | walk only | asking UI Automation |
+|---|---|---|
+| Claude (Electron) | 1.278s | **0.013s** |
+| ChatGPT | 0.589s | **0.023s** |
+| Suno in a browser | 0.709s | **0.041s** |
+| a small dialog | 0.021s | 0.021s — already fast |
+
+UI Automation can run the search **inside the application that owns the
+window**, in one call, so it is asked first whenever the element had an
+automation id. Same answer in every case measured; only the time changed.
+
+**The cost, stated honestly:** when the element really is gone, the search now
+tries UIA *and then* walks, so the miss case is about 5% slower — 2.19s to
+2.31s on the worst window. That is the right trade: a ref goes stale far more
+often than it disappears, and the seconds being saved are seconds the person's
+screen is held.
+
+The fallback walk is **breadth-first** now. Depth-first spent its whole
+4000-node budget on the first deep branch it happened to enter; a control that
+moved in a re-render is almost always still near where it was. And when the
+search does run out of budget, the error says so — *"cut off at N nodes before
+it could look everywhere"* — instead of implying the control is gone.
+
+*This is what "only with numbers" meant. The first implementation was silently
+broken (`_AutomationClient` is not exported at package level), measured as "no
+improvement", and was nearly reverted on that basis. Measuring the idea and
+measuring your typo look identical from the outside.*
+
+### The one promise, re-proved on the shipped file
+
+`release-check.yml` reaches the network — it has to, it compares a published
+download against published source. That is a fair thing to be suspicious of, so
+it now ends by proving the opposite about the only code that matters: it reads
+every Python file **inside the published package** and fails the release if any
+of them imports `socket`, `urllib`, `http`, `ssl`, `requests` or anything else
+that could open a connection.
+
+`SECURITY.md` now draws the line exactly rather than leaving "no network" to do
+work it cannot do. Two files in this repository use the network — the updater
+you start by hand, and that workflow, which runs on GitHub's machines. Neither
+ships. The extension contains `server.py`, `overlay.py`, `manifest.json`,
+`requirements.txt` and `lib/`, and a `.mcpb` is a zip, so you can list it
+yourself.
+
 ## 1.4.1
 
 **The stop button did not work while the screen was held.**
