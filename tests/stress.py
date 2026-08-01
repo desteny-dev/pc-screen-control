@@ -257,9 +257,37 @@ counts = [c.tool("read_ui_tree", {"window_handle": h, "max_nodes": 300}
                  ).get("nodes_returned") for _ in range(5)]
 print("  node counts: %s" % counts)
 check("result does not drift", len(set(counts)) == 1, counts)
-seen = [len(c.tool("describe_screen").get("windows", [])) for _ in range(3)]
-print("  window counts: %s" % seen)
-check("window list is stable", len(set(seen)) == 1, seen)
+# This used to require the window COUNT to be identical across three reads,
+# which is not a property of the server - it is a claim that nobody opened or
+# closed anything for a second and a half. Notifications appear, tooltips come
+# and go, an installer finishes, our own overlay shows and hides. It failed
+# intermittently on a different Python each time, and a test that fails at
+# random gets ignored - and then it is not there on the day it matters, which
+# is the same argument this project makes about a guard that refuses correct
+# work.
+#
+# The real property is narrower and actually about the server: a window that
+# is there in every read must be described the SAME WAY every time. Churn is
+# reported, not failed on.
+lesungen = [c.tool("describe_screen").get("windows", []) for _ in range(3)]
+print("  window counts: %s" % [len(x) for x in lesungen])
+
+bleibend = set.intersection(*[{w["handle"] for w in x} for x in lesungen])
+gewandert = max(len(x) for x in lesungen) - len(bleibend)
+if gewandert:
+    print("  %d window(s) came or went during the reads - that is the desktop, "
+          "not the server" % gewandert)
+
+beschreibungen = {}
+for lesung in lesungen:
+    for w in lesung:
+        if w["handle"] in bleibend:
+            beschreibungen.setdefault(w["handle"], set()).add(
+                (w.get("title"), w.get("verdict"), w.get("framework")))
+uneins = [h for h, s in beschreibungen.items() if len(s) > 1]
+check("windows that stayed are described identically", not uneins,
+      "%d of %d differed" % (len(uneins), len(bleibend)))
+check("something was seen at all", bool(bleibend), len(bleibend))
 
 head("7 - Hygiene")
 check("nothing but JSON-RPC on the protocol line", not c.junk, c.junk[:2])

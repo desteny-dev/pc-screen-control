@@ -36,6 +36,20 @@ broken (`_AutomationClient` is not exported at package level), measured as "no
 improvement", and was nearly reverted on that basis. Measuring the idea and
 measuring your typo look identical from the outside.*
 
+### A test that failed at random, fixed rather than re-run
+
+The stress test required the **window count** to be identical across three
+reads. That is not a property of the server — it is a claim that nobody opened
+or closed anything for a second and a half. Notifications appear, tooltips come
+and go, our own overlay shows and hides. It failed on a different Python each
+time, and **a test that fails at random gets ignored — and then it is not there
+on the day it matters**, which is the same argument this project makes about a
+guard that refuses correct work.
+
+It now checks the narrower thing that is actually about the server: a window
+present in **all three** reads must be described identically every time. Churn
+is reported, not failed on.
+
 ### The one promise, re-proved on the shipped file
 
 `release-check.yml` reaches the network — it has to, it compares a published
