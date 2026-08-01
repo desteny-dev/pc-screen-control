@@ -6,10 +6,17 @@
 
 ## Start here
 
-**Current state:** v1.2.2 is released. 34 tools, 16 test files in CI on Python
+**Current state:** v1.3.0 is released. 34 tools, 17 test files in CI on Python
 3.9 / 3.11 / 3.13, all green. Two packages ship: `.mcpb` for Claude Desktop and
 `.zip` with a setup script for ChatGPT desktop, Codex, Cursor, VS Code, Cline
 and Zed — same server inside both.
+
+1.3.0 closed the last hole found in real use: the guard knew whether the screen
+had *moved*, but not whether the foreground was still the window the assistant
+had *declared*. After a block ended mid-task and the screen went back to the
+person, those were the same answer — and a command meant for a terminal was
+typed into somebody's chat. The declared window is tracked separately now, taken
+from the call itself so no tool can forget it (`tests/test_wrong_window.py`).
 
 Since 1.0.0, in order: the update check left the server and became a program a
 person runs by hand; the libraries are bundled so nothing installs and nothing
