@@ -66,7 +66,27 @@ Replace the path with yours. Use forward slashes, or doubled backslashes
 (`C:\\Tools\\...`). If `python` is not on your PATH, put the full path to
 `python.exe` in `command`.
 
-### GPT — the OpenAI Agents SDK / Codex
+### ChatGPT desktop / Codex — one command
+
+The desktop app runs **local stdio servers**; it does not need a URL and nothing
+gets hosted. It reads `~/.codex/config.toml`, and this writes the entry for you:
+
+```
+python scripts/install-for-gpt.py C:\Tools\psc
+```
+
+It starts the server once and counts its tools **before** writing anything,
+backs the config up, adds or updates exactly one `[mcp_servers.pc-screen-control]`
+block, and leaves every other line — your other MCP servers, your model
+settings — untouched. Then restart ChatGPT and ask it:
+*"Use describe_screen and tell me which windows are open."*
+
+By hand instead: **Settings → MCP servers → Add server → STDIO**, name it, and
+give it the full path to `python.exe` and to `server.py`.
+
+Undo is one line: delete that block, or restore `config.toml.backup` beside it.
+
+### GPT in your own code — the OpenAI Agents SDK / Codex
 
 OpenAI's **Agents SDK** runs local MCP servers the same way Claude does — it
 launches the process and talks over stdio. In your Python agent:
@@ -107,18 +127,16 @@ you keep your screen.
 
 ---
 
-## What about the ChatGPT app itself?
+## The one route that is out of scope
 
-**Deliberately not supported, and it should stay that way.** The consumer
-ChatGPT app (Developer Mode "apps") only connects to **remote** MCP servers over
-an HTTPS **URL** — it cannot launch a local one. To use this tool there you would
-have to run your PC-control server as a public web endpoint and let a cloud
-service reach into your machine through it. That throws away the entire point of
-this project — the server that drives your mouse never touches the network.
+**ChatGPT in a browser**, via the web plugin workflow, registers an MCP server by
+**URL**. That would mean running your PC-control server as a reachable web
+endpoint so a cloud service can reach into your machine — which throws away the
+whole point, so it is not supported and will not be.
 
-So the rule is simple: **anything that runs the server locally (stdio) is
-welcome and stays offline. Anything that needs it on a URL is out of scope by
-design.** The OpenAI Agents SDK above is the offline way to use GPT with it.
+The rule: **anything that starts the server locally over stdio is welcome and
+stays offline; anything that needs it on a URL is out of scope by design.** The
+ChatGPT *desktop app* is the local kind, which is why it works.
 
 ---
 

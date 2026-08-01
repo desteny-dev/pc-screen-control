@@ -57,6 +57,9 @@ jobs:
       - name: Serves any MCP client over stdio, and fails politely
         run: python tests/test_any_client.py
 
+      - name: Registering with GPT does not damage an existing config
+        run: python tests/test_gpt_install.py
+
       - name: Every tool that can change the screen is guarded
         run: python tests/test_guard_coverage.py
 
