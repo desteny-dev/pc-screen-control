@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.3.2
+
+**The window you were in is no longer something this can make disappear.**
+Reported from real use: *"when it takes control my active window goes to the
+background, and now and then it was even closed."*
+
+Three tools can make a window vanish — `close_window` closes it, `claim_window`
+moves it past every monitor, `window state:minimized` hides it — and none of
+them knew which window the person was sitting in. A `window_title` that matched
+theirs instead of ours was the whole distance between working and lost work.
+A fourth path was not a tool at all: `Alt+F4` or `Ctrl+W` sent without a ref,
+landing on whatever happened to hold the keyboard.
+
+The takeover already saves that window, because it has to put it back at the
+end. The same handle is now used for the opposite purpose:
+
+- **Closing, parking or minimising it is refused.** The exception is narrow on
+  purpose — naming that exact `window_handle` *and* `confirm:true` gets
+  through, so "close my Notepad" still works. What is closed off is the
+  accidental path.
+- **An ambiguous `window_title` is refused, not guessed,** for anything
+  destructive. Three windows containing "Chrome" now come back as three
+  candidates with their handles instead of whichever was first.
+- **`Alt+F4` and `Ctrl+W` are refused without a ref.** Every other stray
+  keystroke can be deleted again; these cannot.
+- **A foreground that did not come back is said out loud.** The restore now
+  gets three attempts instead of two, and if the person's window is still not
+  in front, the *next* call — whatever tool that is — carries the handle, the
+  title, and what to do about it. A block often ends on a timer, with no reply
+  to attach the failure to, which is how this stayed invisible.
+- **Watch mode explains itself once.** It skips the restore deliberately;
+  somebody who switched it on last week and forgot only sees their window
+  ending up behind.
+
 ## 1.3.1
 
 **Blind keystrokes now say when they missed.** The check that keeps typing out

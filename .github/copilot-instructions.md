@@ -6,17 +6,38 @@
 
 ## Start here
 
-**Current state:** v1.3.0 is released. 34 tools, 17 test files in CI on Python
+**Current state:** v1.3.2 is released. 34 tools, 18 test files in CI on Python
 3.9 / 3.11 / 3.13, all green. Two packages ship: `.mcpb` for Claude Desktop and
 `.zip` with a setup script for ChatGPT desktop, Codex, Cursor, VS Code, Cline
 and Zed — same server inside both.
 
-1.3.0 closed the last hole found in real use: the guard knew whether the screen
-had *moved*, but not whether the foreground was still the window the assistant
-had *declared*. After a block ended mid-task and the screen went back to the
-person, those were the same answer — and a command meant for a terminal was
-typed into somebody's chat. The declared window is tracked separately now, taken
-from the call itself so no tool can forget it (`tests/test_wrong_window.py`).
+Three releases in a row came from the same place: what the guard protects and
+what a person actually loses were not the same list.
+
+1.3.0 — the guard knew whether the screen had *moved*, but not whether the
+foreground was still the window the assistant had *declared*. After a block
+ended mid-task those were the same answer, and a command meant for a terminal
+was typed into somebody's chat. The declared window is tracked separately now,
+taken from the call itself so no tool can forget it
+(`tests/test_wrong_window.py`).
+
+1.3.1 — the check and the send cannot be one instruction. Seen once live: the
+check passed honestly and the keys landed elsewhere a fraction of a second
+later. Cannot be prevented; the silence after it can. `send_keys` reports
+`off_target` naming both windows.
+
+1.3.2 — the person's own window could be closed, parked out of reach or
+minimised, because no tool knew which window they were sitting in; a
+`window_title` matching theirs instead of ours was the whole distance. It is
+now refused, an ambiguous title is refused rather than guessed for anything
+destructive, `Alt+F4`/`Ctrl+W` without a ref is refused, and a foreground that
+did not come back is reported on the next call whatever tool that is
+(`tests/test_user_window.py`).
+
+**The pattern worth carrying forward:** every one of these was a case where the
+code was internally consistent and still wrong, because the question it asked
+was not the question the person cared about. When adding a guard, write down
+what the person loses, not what the code does.
 
 Since 1.0.0, in order: the update check left the server and became a program a
 person runs by hand; the libraries are bundled so nothing installs and nothing

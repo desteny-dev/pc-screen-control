@@ -25,7 +25,7 @@ import io as _io
 import traceback
 
 SERVER_NAME = "pc-screen-control"
-SERVER_VERSION = "1.3.1"
+SERVER_VERSION = "1.3.2"
 PROTOCOL_VERSION = "2024-11-05"
 
 # MCP speaks UTF-8 in both directions. Windows does not: a pipe defaults to the
@@ -422,7 +422,21 @@ def _top_windows():
     return out
 
 
-def _window_by(handle=None, title=None):
+def _window_by(handle=None, title=None, streng=False):
+    """
+    Find a window by handle, or by title.
+
+    Matching a title by substring is convenient and almost always right, and
+    when it is wrong it is wrong invisibly: 'Chrome' matches the assistant's
+    Chrome and the person's Chrome equally well, and the first one in the list
+    wins. For reading that costs nothing. For closing or parking a window it
+    costs the person their work, and that is a report we already have.
+
+    So destructive callers pass streng=True: if the title fits more than one
+    window and none of them fits exactly, nothing is chosen and the candidates
+    are handed back with their handles. Guessing is fine when being wrong is
+    free; here it is not.
+    """
     _require_uia()
     if handle:
         el = auto.ControlFromHandle(int(handle))
@@ -431,18 +445,67 @@ def _window_by(handle=None, title=None):
         return el, int(handle)
     if title:
         needle = title.lower()
-        best = None
-        for w in _top_windows():
-            t = w["title"].lower()
-            if t == needle:
-                best = w
-                break
-            if needle in t and best is None:
-                best = w
+        genau = [w for w in _top_windows() if w["title"].lower() == needle]
+        teil = [w for w in _top_windows() if needle in w["title"].lower()]
+        best = genau[0] if genau else (teil[0] if teil else None)
         if best is None:
             raise ValueError("No window matches %r" % title)
+        if streng and not genau and len(teil) > 1:
+            raise ValueError(
+                "Refusing to guess: %d windows match %r - %s. This is about to "
+                "do something that cannot be undone, so name the window by "
+                "window_handle instead of by title."
+                % (len(teil), title,
+                   ", ".join("%r (handle %d)" % (w["title"][:50], w["handle"])
+                             for w in teil[:6])))
         return auto.ControlFromHandle(best["handle"]), best["handle"]
     raise ValueError("Provide window_handle or window_title")
+
+
+# ---------------------------------------------------------------------------
+# The window the person was in is not ours to make disappear.
+#
+# Reported from real use: "my active window goes to the background, and now and
+# then it was even closed". Three tools can make a window vanish - close_window
+# closes it, claim_window moves it off every monitor, and window state:minimized
+# hides it - and none of them knew which window the person was sitting in. A
+# title that matched theirs instead of ours was enough.
+#
+# The takeover already saves that window, because it has to put it back at the
+# end. The same handle is used here for the opposite purpose: it is the one
+# window these three tools refuse to touch.
+#
+# Refuse rather than warn, because a warning arrives after the window is gone.
+# The exception is narrow on purpose: naming that exact handle AND confirming
+# gets through, so a person asking "close my Notepad" is still served. What is
+# closed off is the accidental path - a title that matched the wrong window, a
+# handle carried over from before, a habit of tidying the screen.
+def _heimat():
+    """The window the person was in when this takeover started, or None."""
+    g = (_SESSION.get("gesichert") or {}) if _SESSION.get("offen") else {}
+    h = g.get("hwnd")
+    if not h:
+        return None
+    return int(h), (g.get("titel") or "")[:120]
+
+
+def _nutzerfenster_schuetzen(hwnd, args, was):
+    """Refuse to make the person's own window disappear."""
+    heim = _heimat()
+    if not heim or int(hwnd) != heim[0]:
+        return
+    if args.get("window_handle") and args.get("confirm") is True:
+        return                      # named exactly, and decided twice
+    raise RuntimeError(
+        "Refusing to %s: that is %r (handle %d) - the window the person was "
+        "working in when this block started, and the window this block has to "
+        "put back in front when it ends. Making it disappear is how somebody "
+        "loses what they were doing.\n"
+        "If it really is meant to go, hand the screen back with set_guard "
+        "block:'end', ask the person, and only then call this again with "
+        "window_handle:%d and confirm:true. Do not just add confirm:true - the "
+        "point is that a human decided, not that the call was repeated."
+        % (was, heim[1] or "their window", heim[0], heim[0]))
 
 
 def _resolve(ref):
@@ -1037,11 +1100,45 @@ def t_focus_window(args):
                     "set_text - only bring it to the front when you truly must."}
 
 
+# Keystrokes that end a window rather than change something in it. Sent blind -
+# without a ref - they are the one input that cannot be corrected afterwards:
+# by the time the reply says which window received them, that window is gone.
+# Everything else typed into the wrong place can at least be deleted again.
+_TOEDLICHE_TASTEN = (
+    ("%{f4}", "Alt+F4"), ("{alt}{f4}", "Alt+F4"), ("^w", "Ctrl+W"),
+    ("^{f4}", "Ctrl+F4"), ("^+w", "Ctrl+Shift+W"), ("%{f4 ", "Alt+F4"),
+)
+
+
+def _fenster_toetende_tasten(keys):
+    k = str(keys).lower().replace(" ", "")
+    for muster, name in _TOEDLICHE_TASTEN:
+        if muster.replace(" ", "") in k:
+            return name
+    return None
+
+
 def t_send_keys(args):
     _require_uia()
     import time as _t
     el = None
     vorher = None
+    # Blind and window-closing at the same time is the combination behind
+    # "sometimes my window was even closed". With a ref the target is explicit
+    # and this is a normal thing to want; without one it is a coin toss whose
+    # loss is somebody else's unsaved work.
+    if not args.get("ref"):
+        toedlich = _fenster_toetende_tasten(args.get("keys", ""))
+        if toedlich and args.get("confirm") is not True:
+            raise RuntimeError(
+                "Refusing to send %s without a ref. That closes whatever window "
+                "holds the keyboard right now, and without a ref this follows "
+                "the focus rather than a window you named - if it has moved, "
+                "the wrong window closes and nothing here can bring it back.\n"
+                "Do one of these instead: pass a ref inside the window you mean, "
+                "or call focus_window on it first and check with get_focus, or - "
+                "if you have just done that and are sure - call again with "
+                "confirm:true." % toedlich)
     if args.get("ref"):
         el = _resolve(args["ref"])
         if "set_text" in _actions(el) and not args.get("force"):
@@ -1511,6 +1608,12 @@ def t_window(args):
         if zustand not in _WINDOW_STATES:
             raise RuntimeError("state must be one of %s"
                                % ", ".join(_WINDOW_STATES))
+        if zustand == "minimized":
+            # Minimising the person's window looks exactly like closing it to
+            # whoever is sitting there - it is gone from the screen.
+            _nutzerfenster_schuetzen(
+                hwnd, args,
+                "minimize %r" % (_safe(lambda: el.Name, "") or "")[:60])
         wp = _pat(el, "WindowPattern")
         if wp is not None and _safe(
                 lambda: wp.CanMaximize or zustand != "maximized", True):
@@ -1972,6 +2075,13 @@ def _fokus_sichern():
     try:
         import ctypes
         zustand["hwnd"] = ctypes.windll.user32.GetForegroundWindow()
+        # The title is saved next to the handle because it is what a refusal
+        # has to say out loud. "Refusing to close handle 723712" tells nobody
+        # anything; "Refusing to close 'Report.docx - Word'" is a sentence a
+        # person can check against their own screen.
+        zustand["titel"] = (_safe(
+            lambda: auto.ControlFromHandle(int(zustand["hwnd"])).Name,
+            "") or "")[:120]
     except Exception:
         pass
     try:
@@ -2134,6 +2244,15 @@ BERUHIGEN_MS = 40
 # What the last release actually managed to give back. Tools copy this into
 # their reply so "your focus is restored" is a measurement, not a promise.
 _RUECKGABE = {}
+
+# Things that happened between two calls and that the assistant has to be told
+# about on the next one, whatever tool that turns out to be. A field inside the
+# result of the call that caused it is not enough: the failure happens when a
+# block ENDS, and a block often ends on a timer, with no call to attach it to.
+_NACHHALL = {}
+
+# Watch mode skips the restore on purpose. Said once per switch, not per block.
+_WATCH_HINWEIS = {"gesagt": False}
 
 
 # ---------------------------------------------------------------------------
@@ -2300,17 +2419,64 @@ def _session_schliessen():
             # and only give the input back. Switching back to hidden restores
             # them on the next block as usual.
             rueck = {"window": False, "control": False, "watching": True}
+            # Say this out loud once, not never. Watch mode is a switch in the
+            # tray, and somebody who flipped it a week ago and forgot sees only
+            # that their window keeps ending up behind - the exact complaint
+            # this whole restore exists to prevent, coming from the one case
+            # where it is skipped on purpose.
+            if not _WATCH_HINWEIS["gesagt"]:
+                _WATCH_HINWEIS["gesagt"] = True
+                _NACHHALL["watch"] = {
+                    "watch_mode": True,
+                    "what_this_means":
+                        "The tray icon is set to Watch, so this block did NOT "
+                        "put the person's window back in front - watch mode "
+                        "means they want to see the work, and restoring would "
+                        "fight them for the screen. If they are wondering why "
+                        "their window keeps ending up behind, that is why: "
+                        "tray icon, switch off Watch.",
+                }
         else:
+            _WATCH_HINWEIS["gesagt"] = False
+            # Three attempts with growing pauses, not one. The first can lose
+            # to an application that is still painting, and a foreground that
+            # did not come back is the whole complaint - "my window went to the
+            # background and stayed there". Waiting a quarter of a second is
+            # invisible; leaving somebody behind their own window is not.
             rueck = _safe(lambda: _fokus_zurueck(gesichert), None) or {}
-            if not rueck.get("window") and gesichert.get("hwnd"):
-                _t.sleep(0.08)
+            versuche = 1
+            for pause in (0.08, 0.25):
+                if rueck.get("window") or not gesichert.get("hwnd"):
+                    break
+                _t.sleep(pause)
                 rueck = _safe(lambda: _fokus_zurueck(gesichert), None) or rueck
-                rueck["retried"] = True
+                versuche += 1
+            rueck["attempts"] = versuche
+            rueck["home_title"] = (gesichert.get("titel") or "")[:120]
             if _SESSION.get("maus"):
                 _safe(lambda: _maus_zurueck(_SESSION["maus"]))
         _overlay_sagen("release")
         _RUECKGABE.clear()
         _RUECKGABE.update(rueck)
+        # A failed restore used to be a field in a reply nobody reads. It is
+        # now queued as its own message on the next call, because the assistant
+        # has to know it left somebody behind their own window - and is the only
+        # one who can put it right, with focus_window.
+        if gesichert.get("hwnd") and not rueck.get("window") \
+                and not rueck.get("watching"):
+            _NACHHALL["fokus"] = {
+                "foreground_not_restored": True,
+                "should_be_in_front": rueck.get("home_title") or "",
+                "window_handle": int(gesichert.get("hwnd") or 0),
+                "attempts": rueck.get("attempts"),
+                "what_this_means":
+                    "The block ended, but the window the person was working in "
+                    "did NOT come back to the front - they are looking at "
+                    "something else now, most likely a window you raised. Put "
+                    "it right before you do anything else: call focus_window "
+                    "with this window_handle. Do not carry on as if the screen "
+                    "were theirs again.",
+            }
         _SESSION["offen"] = False
         _SESSION["dauer"] = None
         _SESSION["nachricht"] = ""
@@ -3157,8 +3323,10 @@ def t_claim_window(args):
     the next start if this process is killed.
     """
     _require_uia()
-    el, hwnd = _window_by(args.get("window_handle"), args.get("window_title"))
+    el, hwnd = _window_by(args.get("window_handle"), args.get("window_title"),
+                          streng=True)
     titel = (_safe(lambda: el.Name, "") or "")[:120]
+    _nutzerfenster_schuetzen(hwnd, args, "park %r out of reach" % titel)
     schluessel = str(int(hwnd))
 
     if schluessel in _BEANSPRUCHT:
@@ -3256,10 +3424,12 @@ def t_close_window(args):
     close itself, touches no key and no focus, and works on nearly everything
     with a title bar. Alt+F4 stays as the documented fallback and now says so.
     """
-    el, h = _window_by(args.get("window_handle"), args.get("window_title"))
+    el, h = _window_by(args.get("window_handle"), args.get("window_title"),
+                       streng=True)
     titel = (_safe(lambda: el.Name, "") or "")[:120]
     import time as _t
 
+    _nutzerfenster_schuetzen(h, args, "close %r" % titel)
     _unumkehrbar_pruefen(
         args, "close %r" % titel,
         "Anything unsaved in that window is lost, and nothing here can bring "
@@ -3438,7 +3608,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "window_handle": I,
          "state": {"type": "string", "enum": ["normal", "maximized", "minimized"]},
-         "x": I, "y": I, "width": I, "height": I},
+         "x": I, "y": I, "width": I, "height": I, "confirm": B},
          "required": ["window_handle"]}},
     {"name": "clipboard", "_fn": t_clipboard,
      "description": "COST: passive, but it overwrites what the user had copied. Reads or writes the clipboard. For long text this beats send_keys by far: one operation instead of hundreds of keystrokes, and nothing can garble it. Writing returns the previous content in 'replaced' - put it back afterwards.",
@@ -3496,9 +3666,10 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {"window_handle": I,
                                                       "window_title": S}}},
     {"name": "send_keys", "_fn": t_send_keys,
-     "description": "COST: TAKES THE USER'S KEYBOARD, and goes wherever focus happens to be. Right for shortcuts ({Ctrl}s, {Alt}{F4}, {Esc}) and for canvas apps. WRONG for filling a field - use set_text, or clipboard plus {Ctrl}v for long text. Refuses on an element that accepts set_text unless force=true.",
+     "description": "COST: TAKES THE USER'S KEYBOARD, and goes wherever focus happens to be. Right for shortcuts ({Ctrl}s, {Esc}) and for canvas apps. WRONG for filling a field - use set_text, or clipboard plus {Ctrl}v for long text. Refuses on an element that accepts set_text unless force=true. Window-closing keys (Alt+F4, Ctrl+W) are refused without a ref, because blind they close whatever holds the keyboard.",
      "inputSchema": {"type": "object", "properties": {"keys": S, "ref": S,
-                                                      "force": B},
+                                                      "force": B,
+                                                      "confirm": B},
                      "required": ["keys"]}},
     {"name": "self_test", "_fn": t_self_test,
      "description": "Checks everything at once and answers, in plain words, what is wrong and what to do about it. Run this first whenever something does not work, before guessing - it measures rather than remembers, and every failure carries its own fix. Also the right thing to paste into a bug report.",
@@ -3506,7 +3677,7 @@ TOOLS = [
     {"name": "claim_window", "_fn": t_claim_window,
      "description": "Takes a window out of the user's way so both of you can work at the same time. It is moved just past the edge of every monitor, where it keeps running and stays fully operable by ref - but cannot be seen, and cannot be clicked by the user, because Windows will not let the mouse pointer leave the monitors. Use this before a long piece of work in one application: the user keeps their screens, you keep the window. Coordinate clicking does not work out there, so only claim a window you can operate by name. release_window puts it back exactly. Windows are also put back automatically if this server exits or crashes.",
      "inputSchema": {"type": "object", "properties": {
-         "window_handle": I, "window_title": S}}},
+         "window_handle": I, "window_title": S, "confirm": B}}},
     {"name": "release_window", "_fn": t_release_window,
      "description": "Puts a claimed window back exactly where it was and reports whether the position matched to the pixel. Pass all:true to bring every claimed window home.",
      "inputSchema": {"type": "object", "properties": {
@@ -3562,6 +3733,14 @@ def _handle(msg):
             else:
                 content = [{"type": "text",
                             "text": json.dumps(out, ensure_ascii=True, indent=2)}]
+            # Anything that went wrong between calls rides along with the next
+            # answer, once, whatever tool that is.
+            while _NACHHALL:
+                _, hall = _NACHHALL.popitem()
+                content = content + [{"type": "text",
+                                      "text": json.dumps(hall,
+                                                         ensure_ascii=True,
+                                                         indent=2)}]
             if ERSTSTART and not ERSTSTART.get("_gesagt"):
                 ERSTSTART["_gesagt"] = True
                 hinweis = dict(ERSTSTART)
@@ -3577,10 +3756,15 @@ def _handle(msg):
                                                          indent=2)}]
             _send({"jsonrpc": "2.0", "id": rid, "result": {"content": content}})
         except Exception as e:
+            inhalt = [{"type": "text",
+                       "text": "%s: %s" % (type(e).__name__, e)}]
+            while _NACHHALL:                     # also on the failure path
+                _, hall = _NACHHALL.popitem()
+                inhalt.append({"type": "text",
+                               "text": json.dumps(hall, ensure_ascii=True,
+                                                  indent=2)})
             _send({"jsonrpc": "2.0", "id": rid, "result": {
-                "content": [{"type": "text",
-                             "text": "%s: %s" % (type(e).__name__, e)}],
-                "isError": True}})
+                "content": inhalt, "isError": True}})
         # Refresh the takeover baseline after every call, successful or not.
         # Anything this server just did to the foreground belongs in the
         # baseline; only a change that appears *between* calls came from

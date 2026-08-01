@@ -63,6 +63,9 @@ jobs:
       - name: Keystrokes never land in the wrong window
         run: python tests/test_wrong_window.py
 
+      - name: The window the user was in cannot be made to disappear
+        run: python tests/test_user_window.py
+
       - name: Every tool that can change the screen is guarded
         run: python tests/test_guard_coverage.py
 
