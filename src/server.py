@@ -1808,9 +1808,11 @@ def _overlay_starten():
         _OVERLAY["proc"] = None
         _OVERLAY["haelt"] = None          # nothing is held until it says so
         if _OVERLAY["gestorben"] > 5:
+            # Recorded, not printed. A line on stderr is a log nobody reads,
+            # and this is exactly the kind of fact that has to reach whoever is
+            # deciding what to do next - so it goes into self_test and into
+            # input_held, like every other measurement here.
             _OVERLAY["off"] = True
-            sys.stderr.write("[overlay] died %d times; guard disabled\n"
-                             % _OVERLAY["gestorben"])
             return None
     skript = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "overlay.py")
@@ -3400,6 +3402,17 @@ def t_self_test(args):
             # The stale-ref rescue walk, measured. Whether it is worth
             # replacing with an index is a question for these numbers, not for
             # anybody's intuition about 4000 nodes.
+            # Is the part that warns, pulses and HOLDS THE INPUT actually
+            # alive? Everything visible about a takeover lives in that one
+            # process, so "it died and was never restarted" has to be readable
+            # rather than guessed at.
+            "guard_overlay": {
+                "running": bool(_OVERLAY.get("proc")
+                                and _OVERLAY["proc"].poll() is None),
+                "restarts_after_it_died": _OVERLAY.get("gestorben", 0),
+                "disabled": bool(_OVERLAY.get("off")),
+                "input_hooks_reported": _OVERLAY.get("haelt"),
+            },
             "stale_ref_rescue": dict(
                 _SPUR_KOSTEN,
                 sekunden=round(_SPUR_KOSTEN["sekunden"], 3),

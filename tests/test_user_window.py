@@ -338,6 +338,11 @@ pruefe("a dead overlay is restarted, not returned as if alive",
 pruefe("... and 'held' is forgotten when it dies", '"haelt"] = None' in q)
 pruefe("... and a restart loop gives up honestly",
        '_OVERLAY["off"] = True' in q)
+pruefe("... reported, not printed into a log nobody reads",
+       "Recorded, not printed" in q and q.count("sys.stderr.write") <= 1)
+pruefe("self_test says whether the guard process is alive",
+       "guard_overlay" in quelle(server.t_self_test)
+       and "input_hooks_reported" in quelle(server.t_self_test))
 
 with open(ov, encoding="utf-8") as fh:
     o = fh.read()
