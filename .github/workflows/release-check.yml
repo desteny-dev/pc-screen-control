@@ -1,0 +1,95 @@
+name: Release matches the code
+
+# Runs the moment a release is published, and again on demand.
+#
+# CI proves the code at a commit is green. It says nothing about the file
+# people actually download - that is built and uploaded by hand, and "the
+# package matches the tag" was a claim resting on the maintainer remembering
+# to run a script. A claim nobody can check is a claim, not a fact.
+#
+# So this fetches the published assets over the public API, exactly as a
+# stranger would, and compares them byte for byte against the source at the
+# tag. If they ever drift, the release goes red where everyone can see it.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  matches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compare the published package with the code at its tag
+        shell: python
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          import hashlib, io, json, os, re, sys, urllib.request, zipfile
+
+          repo = os.environ["REPO"]
+          api = "https://api.github.com/repos/" + repo
+          roh = "https://raw.githubusercontent.com/" + repo
+          fehler = []
+
+          def hole(url, roh_bytes=False):
+              req = urllib.request.Request(
+                  url, headers={"User-Agent": "release-check"})
+              d = urllib.request.urlopen(req, timeout=60).read()
+              return d if roh_bytes else d.decode("utf-8", "replace")
+
+          rel = json.loads(hole(api + "/releases/latest"))
+          tag = os.environ.get("TAG") or rel["tag_name"]
+          print("Release:", tag)
+
+          def p(name, ok, detail=""):
+              if not ok:
+                  fehler.append(name)
+              print("  %-52s %-7s %s" % (name, "OK" if ok else "FAILED",
+                                         str(detail)[:60]))
+
+          namen = sorted(a["name"] for a in rel["assets"])
+          p("both packages are attached", len(rel["assets"]) == 2,
+            ", ".join(namen))
+          p("no draft, no prerelease",
+            not rel["draft"] and not rel["prerelease"])
+
+          for a in rel["assets"]:
+              d = hole(a["browser_download_url"], True)
+              sha = hashlib.sha256(d).hexdigest()
+              p("%s: SHA-256 is in the notes" % a["name"], sha in rel["body"],
+                sha[:16])
+              p("%s: size is in the notes" % a["name"],
+                str(a["size"]) in rel["body"], "%d bytes" % a["size"])
+
+          mcpb = [a for a in rel["assets"] if a["name"].endswith(".mcpb")]
+          if not mcpb:
+              p("a .mcpb is attached", False)
+          else:
+              paket = zipfile.ZipFile(io.BytesIO(
+                  hole(mcpb[0]["browser_download_url"], True)))
+              namen_im_paket = paket.namelist()
+              p("dependencies travel inside the package",
+                any(n.startswith("lib/") for n in namen_im_paket),
+                "%d files" % len(namen_im_paket))
+              for datei in ("manifest.json", "server.py", "overlay.py",
+                            "requirements.txt"):
+                  quelle = hole("%s/%s/src/%s" % (roh, tag, datei), True)
+                  gleich = (paket.read(datei).replace(b"\r\n", b"\n")
+                            == quelle.replace(b"\r\n", b"\n"))
+                  p("%s is byte-for-byte the code at %s" % (datei, tag), gleich)
+              version = json.loads(paket.read("manifest.json"))["version"]
+              p("the version inside matches the tag",
+                tag.lstrip("v") == version, "%s vs %s" % (tag, version))
+
+          changelog = hole("%s/%s/CHANGELOG.md" % (roh, tag))
+          p("the changelog opens with this version",
+            bool(re.search(r"^##\s*" + re.escape(tag.lstrip("v")),
+                           changelog, re.M)))
+
+          print()
+          if fehler:
+              print("MISMATCH: " + ", ".join(fehler))
+              sys.exit(1)
+          print("The published release is the code at its tag.")
