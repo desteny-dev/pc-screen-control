@@ -47,8 +47,11 @@ command = "node"
 args = ["x.js"]
 """
 
-PY = r"C:\Users\someone\AppData\Local\Programs\Python\Python311\python.exe"
-SRV = r"D:\Tools\pc-screen-control\server.py"
+# Deliberately not a path under a real home directory. The consistency checker
+# refuses those anywhere in the published tree, and it is right to: a fixture
+# that looks like somebody's own machine is how one leaks.
+PY = r"X:\Programs\Python311\python.exe"
+SRV = r"X:\Tools\pc-screen-control\server.py"
 
 
 def main():
