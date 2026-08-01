@@ -23,15 +23,11 @@
 
 ## Install
 
-This is a plain MCP server, so **any MCP client can use it** — Claude Desktop,
-Claude Code, Cursor, VS Code, Cline, Zed, or **GPT through the OpenAI Agents
-SDK**. It is one package, not one per client: the same `server.py` for all of
-them, each running it locally and offline. The one-click `.mcpb` below is Claude
-Desktop's bundle format; for everything else there is a small config —
-see **[docs/OTHER_CLIENTS.md](docs/OTHER_CLIENTS.md)**.
-
 Needs Windows and [Python 3.9+](https://www.python.org/downloads/) — tick **"Add
-python.exe to PATH"** during its setup.
+python.exe to PATH"** during its setup. **Two downloads, same server inside** —
+take the one for your AI:
+
+### For Claude Desktop
 
 **1.** Download **[`pc-screen-control.mcpb`](../../releases/latest)**
 
@@ -43,8 +39,29 @@ pick the file
 
 **3.** Close Claude completely — tray icon included — and start it again
 
-There is no fourth step and nothing to switch on. To check, ask Claude to run
-`describe_screen`; you should get a list of your open windows.
+### For ChatGPT desktop, Codex, Cursor, VS Code, Cline, Zed
+
+**1.** Download **[`pc-screen-control-gpt.zip`](../../releases/latest)** and
+extract it anywhere
+
+**2.** Double-click **`INSTALL-FOR-GPT.bat`**
+
+**3.** Restart ChatGPT
+
+It checks the server answers *before* writing anything, then adds one line to
+`~/.codex/config.toml` and leaves your other settings alone. For the other
+clients it prints the config block to paste. Details:
+**[docs/OTHER_CLIENTS.md](docs/OTHER_CLIENTS.md)**.
+
+---
+
+Nothing to switch on afterwards. To check, ask your AI to run `describe_screen`;
+you should get a list of your open windows.
+
+**Why two files and not one:** `.mcpb` is Claude Desktop's installer format — a
+ZIP with a manifest it knows how to read. Nothing else reads it, so everyone
+else gets the same contents as a plain folder with a setup script beside it.
+Same `server.py`, same libraries, same 34 tools; only the wrapper differs.
 
 <sub>**[Full guide →](docs/GUIDE.md)** · From source instead: download this
 repository as a ZIP and run `scripts\INSTALL.bat` · Remove: *Settings →

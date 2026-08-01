@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.2.2
+
+**A second download, so GPT is not the harder path.** Claude got one file and a
+double-click; everyone else got a ZIP and an explanation. Now there are two
+packages with the same server inside:
+
+| | |
+|---|---|
+| `pc-screen-control.mcpb` | Claude Desktop — install it in Settings → Extensions |
+| `pc-screen-control-gpt.zip` | ChatGPT desktop, Codex, Cursor, VS Code, Cline, Zed — extract, double-click `INSTALL-FOR-GPT.bat` |
+
+`.mcpb` is Claude Desktop's installer format: a ZIP with a manifest it knows how
+to read. Nothing else reads it, so everyone else gets the same contents as a
+plain folder with the setup script beside it. Same `server.py`, same bundled
+libraries, same 34 tools.
+
+**The ChatGPT desktop app runs local servers, and the docs used to say it
+couldn't.** That was true of the browser plugin workflow, which registers a
+server by URL — still out of scope, because this one never goes on the network.
+It was never true of the desktop app, which reads `~/.codex/config.toml` and
+picks the transport from the key it finds: `command` for a local process,
+`url` for a hosted one. `scripts/install-for-gpt.py` writes that entry, after
+starting the server once and counting its tools, and leaves every other line of
+that file alone. `tests/test_gpt_install.py` holds that line in CI.
+
+**Two more faults, both found by using it.** `batch` did not refresh the
+takeover baseline between steps, so a click in step one made step two look like
+the *user* had moved the focus — a false refusal whose only workaround is
+`force: true`, which switches off the check that catches typing into the wrong
+window for real. And `send_keys` without a ref now reports the window and
+control that actually received the keystrokes, instead of advising the caller to
+go and check afterwards.
+
 ## 1.2.1
 
 ### The guard had a hole, and it was the wrong shape
