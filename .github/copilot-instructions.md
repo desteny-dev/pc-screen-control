@@ -6,7 +6,7 @@
 
 ## Start here
 
-**Current state:** v1.3.3 is released. 34 tools, 18 test files in CI on Python
+**Current state:** v1.3.4 is released. 34 tools, 18 test files in CI on Python
 3.9 / 3.11 / 3.13, all green. Two packages ship: `.mcpb` for Claude Desktop and
 `.zip` with a setup script for ChatGPT desktop, Codex, Cursor, VS Code, Cline
 and Zed — same server inside both.
@@ -41,10 +41,23 @@ copy it into their reply; none did. `set_guard block:'end'` now returns
 `handed_back`, including `in_front_now` — what is actually in front, measured
 after the restore, as opposed to whether the call returned true.
 
+1.3.4 — the reader of every reply is a model with no memory of the machine
+between turns. Only `set_guard` said whether a block was open, and swallowed
+exceptions were recorded but only visible in `self_test`, which nobody runs
+mid-task. Both now ride along with every acting call.
+
 **The pattern worth carrying forward:** every one of these was a case where the
 code was internally consistent and still wrong, because the question it asked
 was not the question the person cared about. When adding a guard, write down
 what the person loses, not what the code does.
+
+**And a second one, for reviewers:** the ring buffer for swallowed exceptions
+shipped before 1.0.0 and is in `_FEHLER_LOG`; `_safe` has never been
+`except: pass`. The server opens no socket, so there is no update to verify a
+hash of — the release assets' SHA-256 values are published in the release notes
+instead. Both are recommended regularly by reviewers who quote the code they
+expect rather than the code that is there. **Quote the actual lines you are
+objecting to, with their line numbers, or the recommendation will be closed.**
 
 Since 1.0.0, in order: the update check left the server and became a program a
 person runs by hand; the libraries are bundled so nothing installs and nothing

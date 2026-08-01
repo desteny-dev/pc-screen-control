@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.3.4
+
+**The reader of these replies is a model with no memory of the machine between
+turns.** Two things it could not know now travel with every acting call.
+
+**Is the block still open.** Only `set_guard` reported that. After two turns
+the assistant is guessing, and a block held open by a forgotten `start` is
+exactly how somebody ends up locked out of their own desk. Every reply from a
+tool that can change the screen now carries `block_open`, `seconds_held`,
+`working_in`, the real `input_held`, and a reminder to end it. Readers are not
+nagged — they open no block.
+
+**What was swallowed during this call.** `_safe` hides exceptions on purpose:
+one control that refuses to answer must not abort a walk over two hundred of
+them. Every swallow was already recorded — but only `self_test` showed them,
+and nobody runs `self_test` mid-task. So a call that quietly lost three
+exceptions looked exactly like a clean one. If anything was swallowed *during
+this call*, it is now attached to the result it may have shaped, with the type,
+the line, and what it means. A clean call says nothing.
+
+*Prompted by a review arguing that with an LLM as the user, the guard is no
+longer politeness but an error-detection system. That framing is right, and
+these were the two places the system could not see itself.*
+
 ## 1.3.3
 
 ### The input hold was never actually on

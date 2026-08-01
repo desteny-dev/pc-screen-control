@@ -273,6 +273,61 @@ pruefe("... and warns loudly when it is not held",
        "input_warning" in g and "NOT held" in g)
 
 
+# ---------------------------------------------------------------------------
+print()
+print("10 - every acting reply carries the state the model cannot remember")
+#
+# The reader here is a model with no memory of the machine between turns. Only
+# set_guard reported whether a block was open, so after two turns the assistant
+# is guessing - and a block held by a forgotten start is how somebody ends up
+# locked out of their own desk. Swallowed errors had the same shape: recorded
+# faithfully, and only visible in self_test, which nobody runs mid-task.
+
+server._SESSION["offen"] = True
+server._SESSION["geoeffnet"] = 0.0
+server._ZIEL["titel"] = "Notepad"
+server._OVERLAY["haelt"] = True
+
+aus = server._lagebericht("send_keys", server._FEHLER_ZAEHLER["total"])
+lage = aus[0] if aus else {}
+pruefe("an acting tool is told the block is open", lage.get("block_open") is True)
+pruefe("... and how long it has been held", "seconds_held" in lage)
+pruefe("... and whether the input is really held",
+       lage.get("input_held") is True)
+pruefe("... and which window it is working in", lage.get("working_in") == "Notepad")
+pruefe("... and reminded to end it", "block:'end'" in (lage.get("reminder") or ""))
+
+server._OVERLAY["haelt"] = False
+lage = server._lagebericht("click", server._FEHLER_ZAEHLER["total"])[0]
+pruefe("a shared screen is called a shared screen",
+       "shared" in (lage.get("input_warning") or ""))
+server._OVERLAY["haelt"] = True
+
+pruefe("a reader is not nagged about the block",
+       server._lagebericht("describe_screen",
+                           server._FEHLER_ZAEHLER["total"]) == [])
+server._SESSION["offen"] = False
+pruefe("no block, no state block", server._lagebericht("click", 0) == [])
+
+vorher = server._FEHLER_ZAEHLER["total"]
+server._safe(lambda: 1 / 0)
+server._safe(lambda: {}["nope"])
+aus = server._lagebericht("click", vorher)
+schluck = [a for a in aus if "swallowed_during_this_call" in a]
+pruefe("errors swallowed during the call are reported", len(schluck) == 1)
+if schluck:
+    pruefe("  ... with the count", schluck[0]["swallowed_during_this_call"] == 2)
+    pruefe("  ... with type and line",
+           all("type" in e and "where" in e for e in schluck[0]["errors"]))
+    pruefe("  ... and what it means for the result",
+           "emptier or stranger" in schluck[0]["what_this_means"])
+pruefe("a clean call says nothing",
+       server._lagebericht("click", server._FEHLER_ZAEHLER["total"]) == [])
+
+pruefe("the dispatcher attaches it to every reply",
+       "_lagebericht(" in quelle(server._handle))
+
+
 print()
 print("=" * 74)
 print("NUTZERFENSTER:", "ALLES GRUEN" if not fehler

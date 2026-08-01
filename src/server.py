@@ -25,7 +25,7 @@ import io as _io
 import traceback
 
 SERVER_NAME = "pc-screen-control"
-SERVER_VERSION = "1.3.3"
+SERVER_VERSION = "1.3.4"
 PROTOCOL_VERSION = "2024-11-05"
 
 # MCP speaks UTF-8 in both directions. Windows does not: a pipe defaults to the
@@ -3479,6 +3479,55 @@ def t_close_window(args):
 # can verify rather than one you have to trust.
 # ---------------------------------------------------------------------------
 
+def _lagebericht(name, fehler_vorher):
+    """
+    Two things every reply has to carry, because the reader is a model with no
+    memory of the machine between turns.
+
+    **Am I still holding the screen.** Only set_guard reported that, so after a
+    couple of turns the assistant is guessing - and a block held by a forgotten
+    start is exactly how a person ends up locked out of their own desk. Now the
+    state travels with every acting call, along with what is actually true
+    about the input hold rather than what was asked for.
+
+    **What went wrong quietly during this call.** _safe swallows on purpose - a
+    single control that refuses to answer must not abort a walk over two
+    hundred of them - and every swallow is recorded. But the record lived in
+    self_test, which nobody runs mid-task. So a call that silently lost three
+    exceptions looked exactly like a clean one. Three real defects in this
+    project survived that way. If something was swallowed *during this call*,
+    it goes in the reply, next to the result it may have quietly shaped.
+    """
+    aus = []
+    if _SESSION.get("offen") and name not in LESENDE_WERKZEUGE:
+        import time as _t3
+        lage = {"block_open": True,
+                "seconds_held": round(_t3.time() - (_SESSION.get("geoeffnet")
+                                                    or _t3.time()), 1),
+                "input_held": _OVERLAY.get("haelt"),
+                "working_in": _ZIEL.get("titel") or None,
+                "reminder": "End the block with set_guard block:'end' the "
+                            "moment you no longer need the screen."}
+        if _OVERLAY.get("haelt") is False:
+            lage["input_warning"] = (
+                "Their keyboard and mouse are NOT held - this is a shared "
+                "screen. Never type without a ref.")
+        aus.append(lage)
+
+    neu = _FEHLER_ZAEHLER["total"] - fehler_vorher
+    if neu > 0:
+        aus.append({
+            "swallowed_during_this_call": neu,
+            "errors": list(_FEHLER_LOG)[-min(neu, 5):],
+            "what_this_means":
+                "These were caught and hidden so one stubborn control could "
+                "not abort the whole call. Usually harmless. But if the result "
+                "above is emptier or stranger than expected, this is why - do "
+                "not build the next step on it without looking.",
+        })
+    return aus
+
+
 def t_set_guard(args):
     """
     Change how the input guard behaves, and bracket a burst of work.
@@ -3781,6 +3830,7 @@ def _handle(msg):
                    "error": {"code": -32601, "message": "Unknown tool"}})
             return
         try:
+            fehler_vorher = _FEHLER_ZAEHLER["total"]
             _vor_dem_werkzeug(t["name"], p.get("arguments") or {})
             out = t["_fn"](p.get("arguments") or {})
             if isinstance(out, dict) and "_content" in out:
@@ -3788,6 +3838,11 @@ def _handle(msg):
             else:
                 content = [{"type": "text",
                             "text": json.dumps(out, ensure_ascii=True, indent=2)}]
+            for zusatz in _lagebericht(t["name"], fehler_vorher):
+                content = content + [{"type": "text",
+                                      "text": json.dumps(zusatz,
+                                                         ensure_ascii=True,
+                                                         indent=2)}]
             # Anything that went wrong between calls rides along with the next
             # answer, once, whatever tool that is.
             while _NACHHALL:
