@@ -294,8 +294,11 @@ Claude, speaks only the protocol over a pipe, and checks the handshake, the tool
 schemas, a real call, and that a bad call comes back as an error instead of a
 hang. It runs in CI, so "works with any MCP client" is measured, not claimed.
 
-Run `scripts\print-config.py` to print the block above with your real path
-filled in. Full walkthrough, GPT snippet included: **[docs/OTHER_CLIENTS.md](docs/OTHER_CLIENTS.md)**.
+Two scripts do the work: `scripts\unpack-for-any-client.py` extracts the `.mcpb`
+and prints the config with your real path in it, and `scripts\gpt_example.py` is
+a complete runnable GPT agent (`pip install openai-agents`, then
+`python scripts\gpt_example.py "list my open windows"`). Full walkthrough:
+**[docs/OTHER_CLIENTS.md](docs/OTHER_CLIENTS.md)**.
 
 </details>
 

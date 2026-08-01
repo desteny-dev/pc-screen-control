@@ -15,7 +15,17 @@ client points at the exact same server directly.
 
 ## Step 1 — get the files (once)
 
-Two ways, both leave you with a `server.py` that has its libraries beside it:
+**Fastest way — one command does both steps:**
+
+```
+python scripts/unpack-for-any-client.py pc-screen-control.mcpb C:\Tools\psc
+```
+
+It extracts the package and prints the exact config block with your real path
+already in it. No network, nothing installed.
+
+Or by hand, two ways — both leave you with a `server.py` that has its libraries
+beside it:
 
 - **From the release (offline, nothing to install).** The `.mcpb` is an ordinary
   ZIP. Rename it to `.zip` or open it with any archive tool and extract it to a
@@ -82,6 +92,18 @@ async def main():
 
 That is the "install" for GPT: a few lines of code, pointing at the same
 `server.py`. Nothing is hosted, nothing is exposed.
+
+**`scripts/gpt_example.py` is that, complete and runnable:**
+
+```
+pip install openai-agents
+set OPENAI_API_KEY=sk-...
+python scripts/gpt_example.py "list my open windows"
+```
+
+It finds the server itself, starts it locally, hands GPT the 34 tools, and
+instructs it to work down the cost ladder and to bracket its work in blocks so
+you keep your screen.
 
 ---
 
