@@ -1060,9 +1060,20 @@ def t_send_keys(args):
         return {"ok": True, "sent": args["keys"], "before": vorher,
                 "after": nachher, "changed": _wirkung(vorher, nachher),
                 "effect_verified": bool(_wirkung(vorher, nachher))}
+    # Say WHERE it went, not just that it went. Without a ref these keystrokes
+    # follow whatever holds the focus, and a note telling the caller to go and
+    # check is read after the damage - if it is read at all. A sentence meant
+    # for one window went into a chat with somebody else this way. Naming the
+    # window and the control that received it makes the mistake visible in the
+    # very next line instead of hours later.
+    wohin = _safe(_fokus_kennung)
+    fenster = _fenstertitel(_vordergrund())
     return {"ok": True, "sent": args["keys"],
-            "note": "Sent to whatever had focus. Confirm with get_focus or "
-                    "read_ui_tree that it landed where you intended."}
+            "landed_in_window": fenster or "?",
+            "landed_on": _beschreibe_fokus(wohin),
+            "note": "No ref was given, so this followed the keyboard focus. "
+                    "Check 'landed_in_window' and 'landed_on' above: if that is "
+                    "not what you meant, it went somewhere else."}
 
 
 def t_menu(args):
@@ -2643,6 +2654,14 @@ def t_batch(args):
         try:
             out = t["_fn"](s.get("args") or {})
             erg.append({"step": i, "tool": name, "result": out})
+            # Refresh the takeover baseline after every step, exactly as the
+            # dispatcher does after every call. Without this, step 1 clicking
+            # somewhere makes step 2 look like the USER moved the focus, and the
+            # check refuses with "nothing here moved it, so the user did" - when
+            # it was us. That false refusal is worse than useless: it teaches
+            # you to pass force:true to get through, and force is what turns off
+            # the check that catches typing into the wrong window for real.
+            _safe(_lage_merken)
         except Exception as e:
             erg.append({"step": i, "tool": name,
                         "error": "%s: %s" % (type(e).__name__, e)})
@@ -3330,7 +3349,7 @@ TOOLS = [
          "ref": S, "expect": S, "field": S, "window_title": S,
          "query": S, "in_window": S, "window_handle": I, "timeout": I}}},
     {"name": "batch", "_fn": t_batch,
-     "description": "Runs several steps in ONE call, each with its own result and effect verification. Stops at the first failure and reports where. Example: [{'tool':'invoke','args':{...}},{'tool':'wait_for','args':{'query':'Done'}}]. USE THIS FOR ANY SEQUENCE YOU CAN ALREADY PREDICT. The reason is not round trips, it is the user's time: between two separate calls you are thinking, and thinking is slow, so a five-step job done one call at a time keeps the screen occupied for far longer than the work itself takes. Decide the whole sequence first - the exact refs, the exact text, the order - then run it here in one go. When something genuinely unexpected turns up, end the block (set_guard block:'end') so the user gets their screen back WHILE you work out what to do, and open a new one when you know.",
+     "description": "Runs several steps in ONE call, each with its own result and effect verification. Stops at the first failure and reports where. Example: [{'tool':'invoke','args':{...}},{'tool':'wait_for','args':{'query':'Done'}}]. USE THIS FOR ANY SEQUENCE YOU CAN ALREADY PREDICT. The reason is not round trips, it is the user's time: between two separate calls you are thinking, and thinking is slow, so a five-step job done one call at a time keeps the screen occupied far longer than the work itself takes. Decide the whole sequence first - the exact refs, the exact text, the order - then run it here in one go. TWO RULES THAT DECIDE HOW THIS FEELS TO THE PERSON WHOSE SCREEN IT IS. (1) Read BEFORE you take control, never during: describe_screen, read_ui_tree, find_elements and get_focus cost them nothing and open no block, so plan with those first and only then act - taking control and then looking around is how a two-second job becomes a two-minute freeze. (2) Do not park a long 'wait' in here. The screen stays held for its whole duration while nothing happens, which is the worst thing you can do with it; end the block, wait outside, and open a new one when the page is ready. Short waits between two real actions are fine.",
      "inputSchema": {"type": "object", "properties": {
          "steps": {"type": "array", "items": {"type": "object"}}},
          "required": ["steps"]}},

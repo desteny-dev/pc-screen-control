@@ -117,6 +117,28 @@ def main():
     check("it names the target when there is one", "notepad.exe" in satz2, satz2)
 
     print()
+    print("5b - batch refreshes the baseline, so it never blames the user for us")
+    # A batch whose step 1 clicks and whose step 2 types used to be refused:
+    # the click moved the focus, the takeover check saw a focus that no longer
+    # matched, and reported "nothing here moved it, so the user did". That false
+    # refusal is worse than useless - it teaches you to pass force:true, and
+    # force turns off the check that catches typing into the wrong window for
+    # real. Which is exactly how a message meant for one app ended up in
+    # another. The dispatcher refreshes the baseline after every call; batch
+    # has to do the same between steps.
+    b = quelle_von(server.t_batch)
+    check("batch refreshes the baseline between steps", "_lage_merken" in b)
+    check("it does so after the step, not before",
+          b.index('out = t["_fn"]') < b.index("_lage_merken"))
+
+    print()
+    print("5c - blind keystrokes report where they actually landed")
+    sk = quelle_von(server.t_send_keys)
+    check("send_keys without a ref names the window it hit",
+          "landed_in_window" in sk)
+    check("and the control", "landed_on" in sk)
+
+    print()
     print("6 - the reader list is declared once, not scattered")
     stellen = len(re.findall(r"LESENDE_WERKZEUGE\s*=", src))
     check("declared exactly once", stellen == 1, "%d declarations" % stellen)
