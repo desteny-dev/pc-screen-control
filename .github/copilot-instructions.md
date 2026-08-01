@@ -6,19 +6,36 @@
 
 ## Start here
 
-**Current state:** v1.1.0 is released and working. 34 tools, 9 test files in CI
-on Python 3.9 / 3.11 / 3.13, all green. v1.1.0 was a security pass: the update
-check left the server (it is a separate hand-run program now), the two libraries
-are bundled in `lib/` so the server installs nothing and reaches no network at
-run time (`tests/test_offline.py` proves it), `launch_app` refuses shells and
-URLs unless confirmed, and password fields read back as a placeholder. The
-published release matches this commit. The consistency checker that compares
-every number and claim across README, manifest, CHANGELOG, SECURITY and the
-built package passes.
+**Current state:** v1.2.2 is released. 34 tools, 16 test files in CI on Python
+3.9 / 3.11 / 3.13, all green. Two packages ship: `.mcpb` for Claude Desktop and
+`.zip` with a setup script for ChatGPT desktop, Codex, Cursor, VS Code, Cline
+and Zed — same server inside both.
 
-**Your job:** write the code. Take items from the Version 1 checklist below, in
-order — A1 (verify the update hash) is the most valuable and the most
-self-contained. One item per PR, with the *reason* in the commit message.
+Since 1.0.0, in order: the update check left the server and became a program a
+person runs by hand; the libraries are bundled so nothing installs and nothing
+reaches the network at run time (`tests/test_offline.py` proves it);
+`launch_app` refuses shells and URLs unless confirmed; password fields read back
+as a placeholder; and the guard was rebuilt around a session — one takeover per
+burst, warned on screen with a red pulse and a Windows notification, restored
+once, with **every** tool that can change the screen going through it by default
+(`tests/test_guard_coverage.py` holds that line).
+
+The published release matches this commit. The consistency checker that compares
+every number and claim across README, manifest, CHANGELOG, SECURITY and the
+built package passes, and a second checker verifies the published release
+against the code at its tag.
+
+**The Version 1 checklist further down is DONE — every item of it.** It is kept
+as a record of what was decided and why, not as work. If you propose SHA-256
+verification of the update, a ring buffer for swallowed exceptions, Store-Python
+detection, ruff in CI, an antivirus FAQ, or honest cost reporting in
+`describe_screen`, you are describing this project as it was before 1.0.0. All
+six shipped. **Read the code before recommending anything; this file is history,
+the code is the state.**
+
+**Your job:** write the code for what is actually open — the list is in
+`## What is actually open` below. One item per PR, with the *reason* in the
+commit message.
 
 **Not your job:** building the `.mcpb`, running the Windows GUI tests,
 publishing releases, or checking that the docs still match the code. That is
@@ -27,6 +44,50 @@ Assume every claim you make will be measured before it ships.
 
 **Before you propose anything**, read `CHANGELOG.md`. Several obvious ideas were
 tried and rejected with reasons recorded there.
+
+---
+
+## What is actually open
+
+Everything below is unclaimed and worth doing. Nothing here is on the Version 1
+checklist — that one is finished.
+
+**1. The tray icon is written but never verified on a real desktop.**
+`src/overlay.py` adds a tray icon with Pause, Stop and Watch/Hidden, writing to
+`mode.json`, which the server reads before every action. The state machine is
+tested headless in `tests/test_session.py`; the Win32 half — does the icon
+appear, does the menu open, does a click while input is held still reach it —
+has never been run. That last part matters most: the controls must stay
+clickable *while the guard is holding the mouse*, or they are decoration.
+
+**2. The red pulse and the notification are unverified too.**
+Same reason. `_bar_pixels` now animates red → blue and reaches deeper while the
+user is active, and `notify|` shows a Windows balloon. Both are pure ctypes
+drawing. Colours, timing and whether the balloon appears at all on a machine
+with notifications restricted: unmeasured.
+
+**3. `wait` inside a `batch` holds the screen for its whole duration.**
+Documented as a rule, not enforced. A step that sleeps ten seconds inside a
+block keeps the user locked out for ten seconds of nothing. Options: refuse long
+waits inside `batch`, or have the session release around them and reopen after.
+Second one is nicer and harder — reopening re-warns, which may be worse than the
+wait. Measure before choosing.
+
+**4. `_spur_suchen` walks up to 4000 nodes on a stale ref.**
+The fallback that finds a control again after a page re-render is a full subtree
+walk. On a big Electron window that is not free, and it runs on the failure path
+where things are already going wrong. An automation-id index built during the
+tree walk would make it O(1). Only worth doing with a measurement showing the
+walk actually hurts.
+
+**5. macOS.** `docs/PORTING.md` maps every pattern used here onto the
+Accessibility API. That map has never been compiled. The guard is the harder
+half: macOS has no `WH_KEYBOARD_LL`, and holding input needs an Accessibility
+permission the user grants explicitly.
+
+**Not open, deliberately:** anything that puts the server on a network,
+anything that makes a tool reach the internet, and any "convenience" that
+weakens the rule that every screen-changing tool goes through the guard.
 
 ---
 
