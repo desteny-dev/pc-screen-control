@@ -60,6 +60,9 @@ jobs:
       - name: Registering with GPT does not damage an existing config
         run: python tests/test_gpt_install.py
 
+      - name: Keystrokes never land in the wrong window
+        run: python tests/test_wrong_window.py
+
       - name: Every tool that can change the screen is guarded
         run: python tests/test_guard_coverage.py
 

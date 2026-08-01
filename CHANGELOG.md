@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.3.0
+
+### Keystrokes can no longer land in the wrong window
+
+Reported from real use, and the sequence is worth writing down because every
+single step in it was correct.
+
+A terminal on one screen, the person's own chat window on the other. The
+assistant was told to drive the terminal. It brought that window forward, then
+spent a few seconds working out what to type. The block went idle, **the guard
+did exactly what it is built to do and handed the screen back** — restoring the
+person's window, on the other screen, where they were mid-sentence. Then the
+assistant sent its keystrokes, and a command meant for a terminal was typed into
+their chat.
+
+Nothing malfunctioned. The takeover check asks *"has anything moved since the
+last call"*, and nothing had: the restore was ours, so the baseline agreed with
+the screen. **The question nobody was asking is "is this the window we said we
+were working in".**
+
+So there are two checks now, with different jobs:
+
+| | asks |
+|---|---|
+| the existing one | did the screen move under us — did the *user* click somewhere |
+| the new one | is the foreground still the window we *declared* |
+
+The window the assistant last acted in is remembered — taken from the call
+itself, so no tool can forget to record it — and blind keystrokes or coordinate
+clicks are refused when something else is in front. The refusal names both
+windows, explains that the block probably ended while it was thinking, and says
+to call `focus_window` again rather than force it.
+
+**This is enforced by the extension, not by instructions.** It holds in any
+chat, with any client, whether or not anyone thought to ask for it.
+`tests/test_wrong_window.py` replays the reported sequence step by step, and
+also checks the cases where it must *not* fire — no declared target, target
+matches, target re-focused — because a guard that refuses correct work gets
+switched off.
+
 ## 1.2.2
 
 **A second download, so GPT is not the harder path.** Claude got one file and a

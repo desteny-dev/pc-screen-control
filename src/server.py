@@ -25,7 +25,7 @@ import io as _io
 import traceback
 
 SERVER_NAME = "pc-screen-control"
-SERVER_VERSION = "1.2.2"
+SERVER_VERSION = "1.3.0"
 PROTOCOL_VERSION = "2024-11-05"
 
 # MCP speaks UTF-8 in both directions. Windows does not: a pipe defaults to the
@@ -1026,6 +1026,9 @@ def t_focus_window(args):
     # the user's input, and remembers where they were, to be restored when the
     # block ends. Enforced here: there is no path that foregrounds in silence.
     _session_beruehren("bring %r to the front" % (titel or "a window"))
+    # The clearest statement of intent there is: "I want to work in this one."
+    # Everything typed blindly from here has to land in it.
+    _ziel_setzen(hwnd, titel)
     _safe(lambda: el.SetActive())
     return {"ok": True, "handle": hwnd, "title": titel,
             "note": "Foreground handed over under the guard; the user's window is "
@@ -1735,6 +1738,69 @@ def _fenstertitel(h):
         return ""
 
 
+# ---------------------------------------------------------------------------
+# WHERE THE ASSISTANT SAID IT WANTED TO WORK.
+#
+# _LAGE answers "has anything moved since the last call". That is not the same
+# question as "is this where the assistant meant to type", and the difference
+# cost someone their work.
+#
+# What happened: an assistant was told to drive a PowerShell window on one
+# screen. It brought that window forward, then spent a few seconds thinking. The
+# block went idle, the guard did what it is supposed to do and handed the screen
+# back - restoring the person's own window, on the other screen, where they were
+# typing in a chat. The baseline was updated to that restored state, correctly.
+# Then the assistant sent its keystrokes. Nothing had "moved" since the baseline,
+# so the check passed, and a command meant for a terminal was typed into a
+# stranger's chat box.
+#
+# Every individual step was right. The guard was missing a question: the
+# assistant had declared a target, that target was no longer in front, and
+# nobody was tracking the difference. So it is tracked here. Blind input now has
+# to land in the window the assistant last deliberately worked with, or it is
+# refused - even if nothing "changed", because it is the intent that broke, not
+# the screen.
+_ZIEL = {"hwnd": 0, "titel": "", "gesetzt": 0.0}
+
+
+def _ziel_setzen(hwnd, woher=""):
+    import time as _t
+    try:
+        h = int(hwnd or 0)
+    except Exception:
+        return
+    if not h or h == _ZIEL.get("hwnd"):
+        if h:
+            _ZIEL["gesetzt"] = _t.time()
+        return
+    _ZIEL["hwnd"] = h
+    _ZIEL["titel"] = _fenstertitel(h) or woher
+    _ZIEL["gesetzt"] = _t.time()
+
+
+def _ziel_vergessen():
+    _ZIEL["hwnd"] = 0
+    _ZIEL["titel"] = ""
+    _ZIEL["gesetzt"] = 0.0
+
+
+def _ziel_aus_args(args):
+    """Which window is this call about? A ref carries its window handle in front
+    of the colon; window_handle says it outright."""
+    ref = args.get("ref")
+    if isinstance(ref, str) and ":" in ref:
+        kopf = ref.split(":", 1)[0]
+        if kopf.isdigit():
+            return int(kopf)
+    h = args.get("window_handle")
+    if h:
+        try:
+            return int(h)
+        except Exception:
+            return 0
+    return 0
+
+
 def _lage_merken():
     """Record where the keyboard was pointing when a tool finished."""
     import time as _t
@@ -1772,10 +1838,32 @@ def _lage_pruefen(args, was):
     """
     if args.get("force"):
         return
+
+    import time as _t
+
+    # FIRST: is this even the window we said we were working in? This is a
+    # different question from "did anything move", and it is the one that
+    # matters when the guard has handed the screen back in between - because
+    # then nothing has moved, the baseline agrees with the screen, and the
+    # keystrokes go wherever the person happens to be typing.
+    ziel = _ZIEL.get("hwnd") or 0
+    if ziel:
+        jetzt_h = _vordergrund()
+        if jetzt_h and jetzt_h != ziel:
+            raise RuntimeError(
+                "Refusing to %s: you were working in %r (handle %d), but %r "
+                "(handle %d) is in front now. This usually means the block "
+                "ended while you were thinking and the screen was handed back "
+                "to the user - so these keystrokes would go into whatever they "
+                "are doing, not into your window. Call focus_window on %d "
+                "first, or pass a ref so the target is named rather than "
+                "guessed. force=true skips this and is almost never right here."
+                % (was, _ZIEL.get("titel") or "?", ziel,
+                   _fenstertitel(jetzt_h) or "?", jetzt_h, ziel))
+
     alt = _LAGE.get("hwnd") or 0
     if not alt:
         return                                  # first call, nothing to compare
-    import time as _t
     her = _t.time() - float(_LAGE.get("gesetzt") or 0)
 
     jetzt = _vordergrund()
@@ -2237,10 +2325,19 @@ LESENDE_WERKZEUGE = frozenset({
 
 
 def _vor_dem_werkzeug(name, args):
-    """Runs before every tool call: guard everything that is not a reader."""
+    """Runs before every tool call: guard everything that is not a reader, and
+    remember which window the assistant is working in.
+
+    The target is taken from the call itself - a ref carries its window handle,
+    window_handle states it - so it cannot be forgotten by a tool author. It is
+    only recorded for tools that ACT: reading a window is not a declaration of
+    intent to type in it."""
     if name in LESENDE_WERKZEUGE:
         return
     _session_beruehren(_werkzeug_satz(name, args))
+    h = _ziel_aus_args(args)
+    if h:
+        _ziel_setzen(h, name)
 
 
 def _werkzeug_satz(name, args):
@@ -3213,6 +3310,9 @@ def t_set_guard(args):
                          dauer=args.get("estimate_seconds"), explizit=True)
     elif args.get("block") == "end":
         _session_schliessen()
+        # The block is over, so the declared target is over with it. Keeping it
+        # would refuse the next, unrelated piece of work for no reason.
+        _ziel_vergessen()
 
     if args.get("await_user"):
         # The assistant needs the USER to do something it must not do itself -
