@@ -6,7 +6,7 @@
 
 ## Start here
 
-**Current state:** v1.4.2 is released. 34 tools, 18 test files in CI on Python
+**Current state:** v1.5.0 is released. 34 tools, 18 test files in CI on Python
 3.9 / 3.11 / 3.13, all green. Two packages ship: `.mcpb` for Claude Desktop and
 `.zip` with a setup script for ChatGPT desktop, Codex, Cursor, VS Code, Cline
 and Zed — same server inside both.
@@ -53,6 +53,14 @@ rest of the server's life; a leftover overlay sat glowing with nothing held;
 and the frame followed the virtual desktop rather than each monitor, so on a
 second, shorter screen a person got two edges out of four. `wait` inside
 `batch` is refused past 2 seconds rather than merely discouraged.
+
+1.5.0 — and then a question from outside cut the deepest: *does it work
+outside my screen at all?* It does, and the code did not act like it. A window
+parked past every monitor cannot be seen and cannot be clicked, yet operating
+it still took the person's keyboard. Pattern work on a claimed window now opens
+no block. The README was halved and now answers that question on the front
+page, and macOS is stated as **not available** rather than implied to be
+coming.
 
 **The pattern worth carrying forward:** every one of these was a case where the
 code was internally consistent and still wrong, because the question it asked

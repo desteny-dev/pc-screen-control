@@ -25,7 +25,7 @@ import io as _io
 import traceback
 
 SERVER_NAME = "pc-screen-control"
-SERVER_VERSION = "1.4.2"
+SERVER_VERSION = "1.5.0"
 PROTOCOL_VERSION = "2024-11-05"
 
 # MCP speaks UTF-8 in both directions. Windows does not: a pipe defaults to the
@@ -2661,6 +2661,18 @@ LESENDE_WERKZEUGE = frozenset({
 })
 
 
+# Tools that work purely through the accessibility interface: they name a
+# control and ask its application to operate it. No pointer, no keystroke, no
+# foreground. On a window that has been claimed - parked past every monitor -
+# these disturb nobody, so they run without taking the screen.
+#
+# Everything else stays guarded, including send_keys with a ref: SendKeys goes
+# through the physical keyboard, which belongs to whoever is sitting there.
+OHNE_BILDSCHIRM = frozenset({
+    "invoke", "set_text", "toggle", "expand", "select", "set_value",
+})
+
+
 def _vor_dem_werkzeug(name, args):
     """Runs before every tool call: guard everything that is not a reader, and
     remember which window the assistant is working in.
@@ -2671,8 +2683,28 @@ def _vor_dem_werkzeug(name, args):
     intent to type in it."""
     if name in LESENDE_WERKZEUGE:
         return
-    _session_beruehren(_werkzeug_satz(name, args))
     h = _ziel_aus_args(args)
+    # A claimed window sits past the edge of every monitor. It cannot be seen,
+    # and Windows will not let the mouse pointer leave the monitors, so it
+    # cannot be clicked either. Operating one through the accessibility
+    # interface therefore changes nothing the person can see and needs nothing
+    # they are using - and taking their keyboard for it was pure ceremony.
+    #
+    # Measured before this existed: writing into a parked Notepad reported
+    # input_held: true. The screen was taken to type into a window nobody
+    # could look at.
+    #
+    # So: park the window once, then work without interrupting anyone. That is
+    # the whole point of claiming, and it only becomes true here.
+    #
+    # Deliberately NOT exempt: anything that uses the physical mouse or
+    # keyboard (they act wherever the hardware points, not on a window),
+    # and anything that changes what is visible - bringing a window forward,
+    # moving it, closing it, parking or unparking.
+    if h and str(int(h)) in _BEANSPRUCHT and name in OHNE_BILDSCHIRM:
+        _ziel_setzen(h, name)
+        return
+    _session_beruehren(_werkzeug_satz(name, args))
     if h:
         _ziel_setzen(h, name)
 

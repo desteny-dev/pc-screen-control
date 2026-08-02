@@ -1,5 +1,53 @@
 # Changelog
 
+## 1.5.0
+
+### Work on a parked window now costs the person nothing
+
+`claim_window` moves a window just past the edge of every monitor. It keeps
+running and stays fully operable by name — but nobody can see it, and Windows
+will not let the mouse pointer leave the monitors, so nobody can click it
+either.
+
+Operating such a window through the accessibility interface therefore changes
+nothing anyone can see and needs nothing anyone is using. Taking their keyboard
+for it was ceremony. Measured on a real desktop before this changed: writing
+into a parked Notepad reported `input_held: true` — **the screen was taken to
+type into a window nobody could look at.**
+
+`invoke`, `set_text`, `toggle`, `expand`, `select` and `set_value` on a claimed
+window now open **no block**: no pulse, no notification, no held input. Park a
+window once and the assistant works beside the person instead of instead of
+them.
+
+Deliberately **not** exempt, and the list is the point: anything that uses the
+physical mouse or keyboard — `click`, `drag`, `send_keys`, `hold_key` — because
+those act wherever the hardware points, not on a window. And anything that
+changes what is visible: `focus_window`, `window`, `close_window`,
+`claim_window`, `release_window`, `launch_app`, `batch`.
+
+### The README is less than half as long
+
+339 lines to 182. What was removed was not information but repetition — the
+cost ladder, the walkthrough and the design notes live in `docs/GUIDE.md`,
+which is where somebody goes who has already decided. The front page is for
+somebody deciding.
+
+Added instead, because it was the most common honest question and the answer
+was scattered: **does it use your screen?** Thirty of the thirty-four tools
+never touch the mouse or keyboard; four do and say so; and a claimed window is
+outside your view entirely. Also stated plainly: this is **not** a private
+virtual display, Windows does not offer one, and parking off-monitor is the
+closest thing that genuinely works.
+
+### macOS is not coming, and now says so
+
+`docs/PORTING.md` maps the patterns onto the macOS Accessibility API, and that
+map has been read as a plan. It is not one: nobody has compiled a line of it,
+and the guard half — holding input — has no macOS equivalent of
+`WH_KEYBOARD_LL`. The README now says **not available** rather than implying
+it is on the way.
+
 ## 1.4.2
 
 ### Finding a control again after the page moved: 98x faster where it matters

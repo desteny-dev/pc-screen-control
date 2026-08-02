@@ -432,6 +432,49 @@ pruefe("_im_rect: no taskbar found means nothing is carved out",
        not _im_rect(None, 100, 2100))
 
 
+# ---------------------------------------------------------------------------
+print()
+print("15 - a parked window does not cost the person their screen")
+#
+# claim_window puts a window past the edge of every monitor: it cannot be seen,
+# and Windows will not let the mouse pointer leave the monitors, so it cannot
+# be clicked. Operating it through the accessibility interface changes nothing
+# anybody can see. Taking their keyboard for that was ceremony - measured on a
+# real desktop, writing into a parked Notepad reported input_held: true.
+
+q = quelle(server._vor_dem_werkzeug)
+pruefe("a claimed window is recognised", "_BEANSPRUCHT" in q)
+pruefe("... and pattern work on it opens no block",
+       "OHNE_BILDSCHIRM" in q and "return" in q)
+pruefe("... but the window is still remembered as the target",
+       q.count("_ziel_setzen") >= 2)
+
+for werkzeug in ("invoke", "set_text", "toggle", "expand", "select",
+                 "set_value"):
+    pruefe("%s is exempt on a parked window" % werkzeug,
+           werkzeug in server.OHNE_BILDSCHIRM)
+
+# The line that matters more: what must NEVER be exempt.
+for werkzeug in ("click", "drag", "send_keys", "hold_key", "focus_window",
+                 "window", "close_window", "claim_window", "release_window",
+                 "launch_app", "batch", "menu", "scroll"):
+    pruefe("%s is NOT exempt - it uses the hardware or moves what is visible"
+           % werkzeug, werkzeug not in server.OHNE_BILDSCHIRM)
+
+server._BEANSPRUCHT.clear()
+server._SESSION["offen"] = False
+server._vor_dem_werkzeug("invoke", {"ref": "4242:1.0"})
+pruefe("an UNparked window still opens a block", server._SESSION["offen"])
+server._SESSION["offen"] = False
+server._BEANSPRUCHT["4242"] = {"home": (0, 0, 10, 10), "title": "geparkt"}
+server._vor_dem_werkzeug("invoke", {"ref": "4242:1.0"})
+pruefe("a parked window does not", not server._SESSION["offen"])
+server._vor_dem_werkzeug("send_keys", {"ref": "4242:1.0", "keys": "hi"})
+pruefe("... but send_keys on it still does", server._SESSION["offen"])
+server._SESSION["offen"] = False
+server._BEANSPRUCHT.clear()
+
+
 print()
 print("=" * 74)
 print("NUTZERFENSTER:", "ALLES GRUEN" if not fehler
