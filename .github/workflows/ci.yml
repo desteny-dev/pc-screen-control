@@ -66,6 +66,15 @@ jobs:
       - name: The window the user was in cannot be made to disappear
         run: python tests/test_user_window.py
 
+      # Somebody's first instinct is `pytest`, and that path used to end in
+      # INTERNALERROR with exit code 0 - it looked like "there are no tests"
+      # rather than "the runner broke". Now it is a step of its own, so it
+      # cannot quietly stop working again.
+      - name: pytest collects and runs the suite
+        run: |
+          pip install pytest
+          python -m pytest -q
+
       - name: Every tool that can change the screen is guarded
         run: python tests/test_guard_coverage.py
 

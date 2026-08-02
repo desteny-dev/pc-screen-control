@@ -142,4 +142,5 @@ if _failures:
 else:
     print("all checks passed")
 print("-" * 68)
-sys.exit(1 if _failures else 0)
+if __name__ == "__main__":          # never on import
+    sys.exit(1 if _failures else 0)

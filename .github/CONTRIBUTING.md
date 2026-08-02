@@ -34,6 +34,11 @@ python src/server.py --install     # register it with your MCP client
 
 CI runs all eighteen on Windows against Python 3.9, 3.11 and 3.13.
 
+`pytest -q` works too and runs the same scripts as subprocesses — see
+`tests/conftest.py` for why they are scripts and not pytest functions.
+When one fails, pytest prints the measurement the script printed, which
+is the part worth reading.
+
 ## The one rule
 
 **Measure before you claim.** Every number in the README came from

@@ -437,4 +437,5 @@ print("=" * 74)
 print("NUTZERFENSTER:", "ALLES GRUEN" if not fehler
       else "FEHLER -> " + ", ".join(fehler))
 print("=" * 74)
-sys.exit(1 if fehler else 0)
+if __name__ == "__main__":          # never on import
+    sys.exit(1 if fehler else 0)
