@@ -34,8 +34,8 @@ Settings → Extensions → Advanced → Install extension → restart Claude.
 **`pc-screen-control-gpt.zip`**, extract it, double-click
 **`INSTALL-FOR-GPT.bat`**, restart the app.
 
-Then ask your AI to run **`self_test`**. It answers in plain words, and every
-failure carries its own fix.
+Then ask your AI to run **`self_test`**. It reports what works, and every
+failure names its own fix.
 
 <sub>Upgrading: remove the old version first and quit the app completely,
 including its tray icon. · [Full guide](docs/GUIDE.md) ·
@@ -45,9 +45,9 @@ including its tray icon. · [Full guide](docs/GUIDE.md) ·
 
 ## What it does
 
-Windows already publishes what is on screen as structured data — every button,
-field and list, with its name and state. It is the same thing screen readers
-use. This hands that to your AI instead of a picture.
+Windows publishes what is on screen as structured data: every button, field
+and list, with its name and state. It is the same interface screen readers use.
+This hands that to your AI instead of a picture.
 
 |  | screenshot + coordinates | this |
 |---|---|---|
@@ -58,36 +58,35 @@ use. This hands that to your AI instead of a picture.
 
 ---
 
-## Does it use *your* screen?
+## Does it use your screen?
 
-Worth being exact about, because the honest answer is "mostly not".
+Mostly not.
 
 **30 of the 34 tools never touch your mouse or keyboard.** Reading the window
-tree is pure data. Pressing a button, filling a field, setting a slider — all of
-that goes through the accessibility interface and works on a window that is
-behind others, or not visible at all.
+tree is pure data. Pressing a button, filling a field, setting a slider go
+through the accessibility interface and work on a window that is behind others,
+or not visible at all.
 
 **Four tools do take the hardware:** `click`, `drag`, `send_keys`, `hold_key`.
-They are for surfaces that paint themselves and publish nothing — editing
+They are for surfaces that paint themselves and publish no controls: editing
 canvases, timelines, games. While one runs, the screen edge pulses red, a
-Windows notification says what is happening and for how long, and your input is
-held so your keystrokes cannot land inside the work. It is handed back when the
-block ends — window, focus and text cursor — and the reply says whether that
-actually happened, measured.
+Windows notification states what is happening and for how long, and your input
+is held so your keystrokes cannot land inside the work. Window, focus and text
+cursor are restored when the block ends, and the reply reports whether that
+succeeded.
 
-**And there is a way out of your sight entirely.** `claim_window` moves a window
-just past the edge of every monitor. It keeps running and stays fully operable
-by name, but you cannot see it, and Windows will not let your mouse pointer
-leave the monitors, so you cannot click it by accident either. Work on a parked
-window **costs you nothing**: no pulse, no held input, no interruption. Park it
-once and the AI works beside you instead of instead of you.
+**A claimed window is outside your view entirely.** `claim_window` moves a
+window just past the edge of every monitor. It keeps running and stays fully
+operable by name, but it is not visible and Windows will not let your pointer
+leave the monitors, so you cannot click it by accident. Work on a parked window
+takes no block at all: no pulse, no held input, no interruption.
 
-What this is **not**: a private virtual display. Windows does not let a normal
+This is **not** a private virtual display. Windows does not let an ordinary
 program create a second screen for an application. Parking off-monitor is the
-closest thing that genuinely works — and it is real, not a trick.
+closest equivalent that works.
 
-*The tray icon's Pause / Stop / Watch stay clickable even while your input is
-held; the taskbar is deliberately left out of the hold.*
+The tray icon's Pause, Stop and Watch stay clickable while your input is held;
+the taskbar is excluded from the hold.
 
 ---
 
@@ -110,7 +109,7 @@ held; the taskbar is deliberately left out of the hold.*
 | **`wait_for`** `wait` | Wait for a condition, not for the clock |
 | **`batch`** | Several verified steps in one call |
 | `launch_app` `close_window` `focus_window` | Processes and windows |
-| **`self_test`** | Checks everything and says what is wrong and what to do about it |
+| **`self_test`** | Checks the installation and reports what is wrong and how to fix it |
 | **`claim_window`** `release_window` | Park a window out of your reach, and put it back to the pixel |
 | **`set_guard`** | Who has priority while the AI works — `claude` or `me` |
 
@@ -118,8 +117,8 @@ held; the taskbar is deliberately left out of the hold.*
 
 ## Reach, measured
 
-From `tests/measure_desktop.py`, which ships here so you can contradict these
-numbers on your own machine.
+Measured with `tests/measure_desktop.py`, which ships here so the numbers can
+be reproduced or contradicted on your own machine.
 
 | | actionable nodes |
 |---|---:|
@@ -128,16 +127,16 @@ numbers on your own machine.
 | DaVinci Resolve, Project Manager | 53 |
 
 Browsers and Electron build their tree only once something asks: a first look
-reports 13 nodes, after waking it 207. Self-drawn surfaces publish nothing and
-are reached with `capture` + `click` — you lose precision and proof, not access.
+reports 13 nodes, 207 after waking it. Self-drawn surfaces publish no controls
+and are reached with `capture` and `click` instead.
 
 ---
 
 ## Before you rely on it
 
-- **Windows only, and there is no macOS version.** `docs/PORTING.md` maps the
-  patterns onto the macOS Accessibility API, but that is a map and nobody has
-  compiled a line of it. Treat macOS as **not available**, not as coming.
+- **Windows only.** `docs/PORTING.md` maps the patterns onto the macOS
+  Accessibility API, but none of it has been implemented. macOS is **not
+  available**.
 - **No network at all.** The server opens no socket — no update check, no
   telemetry. Two files here *do* use the network and neither ships: the updater
   you start by hand, and a workflow on GitHub's machines that verifies every
@@ -146,28 +145,26 @@ are reached with `capture` + `click` — you lose precision and proof, not acces
   About half of all elements also carry an `automation_id`, which does not
   translate; `find_elements` searches both and says which matched.
 - **Your antivirus may object.** A program that reads other applications and
-  moves the mouse looks structurally like spyware. No signature, no company
-  here — but the whole server is one readable Python file.
+  moves the mouse is structurally similar to spyware. There is no code signing
+  certificate here; the server is a single readable Python file instead.
   [docs/ANTIVIRUS.md](docs/ANTIVIRUS.md)
 - **Administrator processes are invisible.** Windows blocks input across
   integrity levels by design.
 - **No undo of its own.** Closing a window or sending a message is not something
   any tool takes back.
-- **Early software, one person, spare time.** No support, no SLA.
+- **Maintained by one person.** No support contract, no SLA.
 
 ---
 
-## The rule this is built on
+## Verification
 
-> **Measure before you claim. A function that does not report whether it worked
-> will eventually stop working, and nobody will notice.**
+Every claim on this page has a test behind it. 18 test files run in CI on
+Python 3.9, 3.11 and 3.13, and each release is checked against its own source
+automatically: the published packages are downloaded and compared byte for byte
+with the code at their tag.
 
-Most of the code exists because of that sentence. Several defects here survived
-for weeks while looking complete and doing nothing: a focus restore that Windows
-had never once granted, input hooks installed on a thread that could not receive
-them, a measurement written on every block and read by nobody. Every claim on
-this page has a test behind it, and every number came from a measurement that
-has been wrong before.
+Run them yourself: `python -m pytest -q`, or any single file directly —
+`python tests/test_offline.py`.
 
 <sub>[Changelog](CHANGELOG.md) · [Security](.github/SECURITY.md) ·
 [Contributing](.github/CONTRIBUTING.md) · [Other clients](docs/OTHER_CLIENTS.md)
