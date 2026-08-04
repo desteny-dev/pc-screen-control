@@ -6,7 +6,7 @@
 
 ## Start here
 
-**Current state:** v1.5.0 is released. 34 tools, 18 test files in CI on Python
+**Current state:** v1.6.0 is released. 34 tools, 18 test files in CI on Python
 3.9 / 3.11 / 3.13, all green. Two packages ship: `.mcpb` for Claude Desktop and
 `.zip` with a setup script for ChatGPT desktop, Codex, Cursor, VS Code, Cline
 and Zed — same server inside both.
@@ -61,6 +61,17 @@ it still took the person's keyboard. Pattern work on a claimed window now opens
 no block. The README was halved and now answers that question on the front
 page, and macOS is stated as **not available** rather than implied to be
 coming.
+
+1.6.0 — reported twice: keystrokes landed in a chat window instead of a
+terminal, and windows were closed that nobody meant to close. Both from the ref
+path of `send_keys`, which called `SetFocus`, swallowed its failure, and sent
+anyway. Beside it: *"with a ref the focus was just set explicitly, so there is
+nothing to drift."* **The third comment in this project asserting a property the
+code did not check** — after the restore that never ran and the tray icon that
+was "a normal window". The foreground is verified before sending now.
+
+**If you take one thing from this file:** when a comment states a guarantee,
+find the line that enforces it. Three times here, there was none.
 
 **The pattern worth carrying forward:** every one of these was a case where the
 code was internally consistent and still wrong, because the question it asked

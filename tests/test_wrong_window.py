@@ -148,8 +148,17 @@ def main():
     check("send_keys compares where it landed against the target",
           "off_target" in sk)
     check("and says not to keep typing", "Do not send more" in sk)
-    check("the warning names the window it should have gone to",
-          "_ZIEL" in sk.split("off_target")[1][:600])
+    # This used to require the string "_ZIEL" near the first "off_target",
+    # which stopped being true in 1.6.0: there are two off_target reports now,
+    # one for the ref path and one for the ref-less path, and the ref path
+    # names its window from the ref rather than from _ZIEL. The check was
+    # asserting HOW the name is fetched; what matters is that every warning
+    # names a window at all.
+    stellen = sk.split("off_target")[1:]
+    check("both paths report it", len(stellen) >= 2, "%d Stellen" % len(stellen))
+    check("every warning names the window it should have gone to",
+          all(("_ZIEL" in s[:700] or "_fenstertitel(ziel_h)" in s[:700])
+              for s in stellen))
 
     print()
     print("6 - ending the block forgets the target")

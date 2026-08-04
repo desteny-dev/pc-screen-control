@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.6.0
+
+### A ref made the intent explicit. It never made the destination certain.
+
+Reported from real use, twice, and both reports trace to the same six lines:
+
+> *"Two lines slipped into Claude Code's window instead of PowerShell — the
+> window pulled the focus away."*
+
+> *"The Claude window has been closed several times. It happens often."*
+
+`send_keys` with a ref did this:
+
+```python
+vorher = _state(el)
+_safe(lambda: el.SetFocus())      # failure swallowed
+...
+wache = None if args.get("ref") else (...)   # no check when a ref is given
+```
+
+And beside it, a comment: *"with a ref the focus was just set explicitly above,
+so there is nothing to drift."* **An assumption the code never checked** — the
+same shape of mistake as the tray icon comment in 1.4.1, and the third of its
+kind found in this project.
+
+`SetFocus` fails silently on a window that will not take the foreground, and an
+Electron app can pull the foreground back a moment later. The keystrokes then
+go through the **physical keyboard**, which serves whatever is in front — not
+the element that was named.
+
+**Now:** after focusing, the foreground is compared with the ref's window
+*before anything is sent*. If they differ, it refuses and names both, and
+points at `set_text`, which writes into the element itself and needs no
+foreground at all. Afterwards it reports `off_target` on this path too, exactly
+as the ref-less path already did.
+
+### Window-closing keys with a ref were exempt from everything
+
+`Alt+F4` and `Ctrl+W` without a ref have been refused since 1.3.2 — but **with**
+a ref they bypassed every check, on the theory that naming a window makes the
+intent explicit. It does. It does not make the person's own window ours to
+close. Their window now needs the same handle-plus-confirmation as
+`close_window`.
+
+*This is the likely cause of "the Claude window was closed again".*
+
 ## 1.5.0
 
 ### Work on a parked window now costs the person nothing

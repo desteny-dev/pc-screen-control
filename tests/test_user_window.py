@@ -475,6 +475,34 @@ server._SESSION["offen"] = False
 server._BEANSPRUCHT.clear()
 
 
+# ---------------------------------------------------------------------------
+print()
+print("16 - a ref makes the intent explicit, not the destination certain")
+#
+# Reported twice from real use: keystrokes meant for a terminal landed in a
+# chat window, and windows were closed that nobody meant to close. Both came
+# from the same place - the ref path of send_keys called SetFocus, swallowed
+# its failure, and sent anyway. The comment beside it said "with a ref the
+# focus was just set explicitly, so there is nothing to drift": an assumption
+# the code never checked. Same shape as the tray icon.
+
+q = quelle(server.t_send_keys)
+pruefe("the ref path checks the foreground BEFORE sending",
+       "_vordergrund()" in q and "Refusing to send these keystrokes: the ref" in q)
+pruefe("... and names both windows in the refusal",
+       "but %r is in front" in q)
+pruefe("... and points at set_text as the way that needs no foreground",
+       "set_text instead where you can" in q)
+pruefe("the wrong comment is gone",
+       "so there is nothing to drift" not in q)
+pruefe("the ref path also reports off_target afterwards",
+       q.count("off_target") >= 2)
+pruefe("window-closing keys with a ref are no longer exempt",
+       "_nutzerfenster_schuetzen" in q)
+pruefe("force still gets through, deliberately",
+       'not args.get("force")' in q)
+
+
 print()
 print("=" * 74)
 print("NUTZERFENSTER:", "ALLES GRUEN" if not fehler

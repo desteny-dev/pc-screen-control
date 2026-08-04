@@ -25,7 +25,7 @@ import io as _io
 import traceback
 
 SERVER_NAME = "pc-screen-control"
-SERVER_VERSION = "1.5.0"
+SERVER_VERSION = "1.6.0"
 PROTOCOL_VERSION = "2024-11-05"
 
 # MCP speaks UTF-8 in both directions. Windows does not: a pipe defaults to the
@@ -1247,19 +1247,84 @@ def t_send_keys(args):
                 "atomic, cannot be corrupted by a stray keystroke, and does "
                 "not occupy the keyboard. Pass force=true to type anyway.")
         vorher = _state(el)
+
+        # This used to be a bare _safe(SetFocus) followed by the comment "with
+        # a ref the focus was just set explicitly, so there is nothing to
+        # drift". That was an assumption the code never checked, and it is the
+        # same shape of mistake as the tray icon: a sentence asserting a
+        # property the machine does not guarantee.
+        #
+        # Reported from real use, twice: keystrokes meant for a terminal landed
+        # in a chat window, and windows were closed that nobody meant to close.
+        # Both come from here.
+        #
+        # SetFocus fails silently on a window that will not take the
+        # foreground, and an Electron app can pull the foreground back a moment
+        # later. The keystrokes then go to the physical keyboard - which serves
+        # whatever is in front, not the element that was named. A ref makes the
+        # INTENT explicit; it does nothing to make the DESTINATION certain.
+        ziel_h = 0
+        try:
+            ziel_h = int(str(args["ref"]).partition(":")[0])
+        except Exception:
+            ziel_h = 0
+
+        # A ref used to exempt the window-closing keys entirely, on the theory
+        # that naming a window makes the intent explicit. It does - but the
+        # person's own window is not ours to close on an intent, and "the
+        # Claude window was closed again" is a report we have. Same rule as
+        # close_window: their window needs a handle AND a confirmation.
+        toedlich = _fenster_toetende_tasten(args.get("keys", ""))
+        if toedlich and ziel_h:
+            _nutzerfenster_schuetzen(
+                ziel_h, {"window_handle": args.get("confirm") and ziel_h,
+                         "confirm": args.get("confirm")},
+                "send %s to %r" % (toedlich, _fenstertitel(ziel_h) or "it"))
+
         _safe(lambda: el.SetFocus())
-    # With no ref this follows whatever holds the keyboard, so the target has to
-    # be verified under the lock - see _eingabe_laeuft. With a ref the focus was
-    # just set explicitly above, so there is nothing to drift.
+        _t.sleep(0.05)                       # let the focus change settle
+        vorne = _vordergrund()
+        if ziel_h and vorne and int(vorne) != ziel_h and not args.get("force"):
+            raise RuntimeError(
+                "Refusing to send these keystrokes: the ref names %r (handle "
+                "%d), but %r is in front, and the keyboard serves whatever is "
+                "in front - not the element you named. Focus was asked for and "
+                "did not take, or something pulled it back.\n"
+                "A ref makes your intent explicit; it does not make the "
+                "destination certain. Call focus_window on %d, check with "
+                "get_focus, then send. Use set_text instead where you can - it "
+                "writes into the element itself and needs no foreground at all."
+                % (_fenstertitel(ziel_h) or "that window", ziel_h,
+                   _fenstertitel(vorne) or "another window", ziel_h))
+
+    # Without a ref this follows whatever holds the keyboard, so the target is
+    # verified under the lock - see _eingabe_laeuft. With a ref it was verified
+    # just above, before anything was sent.
     wache = None if args.get("ref") else (args, "send these keystrokes")
     with _eingabe_laeuft(wache):
         auto.SendKeys(str(args["keys"]), waitTime=0.02)
         _t.sleep(0.4)
     if el is not None:
         nachher = _state(el)
-        return {"ok": True, "sent": args["keys"], "before": vorher,
-                "after": nachher, "changed": _wirkung(vorher, nachher),
-                "effect_verified": bool(_wirkung(vorher, nachher))}
+        erg = {"ok": True, "sent": args["keys"], "before": vorher,
+               "after": nachher, "changed": _wirkung(vorher, nachher),
+               "effect_verified": bool(_wirkung(vorher, nachher))}
+        # Same check as the no-ref path, and for the same reason: the gap
+        # between the check and the send cannot be closed, only reported. If
+        # nothing measurably changed in the element AND the foreground moved,
+        # the keystrokes went somewhere else.
+        danach = _vordergrund()
+        if ziel_h and danach and int(danach) != ziel_h:
+            erg["off_target"] = True
+            erg["warning"] = (
+                "These keystrokes did NOT go to %r (handle %d) - %r is in "
+                "front now, and the keyboard follows the foreground. Do not "
+                "send more. Read the screen, and check whether anything has to "
+                "be undone in %r."
+                % (_fenstertitel(ziel_h) or "the target", ziel_h,
+                   _fenstertitel(danach) or "another window",
+                   _fenstertitel(danach) or "that window"))
+        return erg
     # Say WHERE it went, not just that it went. Without a ref these keystrokes
     # follow whatever holds the focus, and a note telling the caller to go and
     # check is read after the damage - if it is read at all. A sentence meant
