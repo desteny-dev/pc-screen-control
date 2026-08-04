@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.6.1
+
+### Three more of the same, found by looking rather than by waiting
+
+1.6.0 fixed a `SetFocus` whose failure was swallowed. That is a *pattern*, not
+an incident, so the rest of the file was audited for it: every call whose
+result is discarded and whose success the next line assumes.
+
+**`focus_window` reported `ok: True` without ever asking whether the window
+came forward.** It used a bare `el.SetActive()` — which Windows refuses
+silently for a background process, exactly like `SetForegroundWindow`. The
+robust version, with the thread attachment and the foreground-lock timeout,
+already existed in this file as `_vordergrund_setzen` — but only the *restore*
+path used it. The tool a caller actually reaches for had the naive one.
+
+That is how an assistant ends up believing it is in a terminal when it is not:
+it called `focus_window`, got `ok: True`, and typed. It now verifies, reports
+`in_front`, returns `ok: False` with what to do instead, and — importantly —
+**does not declare a target it could not reach**, because a declared target
+that is not in front is exactly what blind typing trusts.
+
+**`close_window`'s Alt+F4 fallback** brought the window forward with the same
+unverified call and sent regardless. Alt+F4 closes whatever is in *front*. It
+now verifies first and sends nothing if the wrong window is there.
+
+**`capture`** could return a picture captioned "window: X" that shows whatever
+was covering X. It now says so in the caption.
+
+Checked and *not* changed: `menu` waits for the popup to appear, and `window`
+returns before/after state. Both already verify their own effect.
+
+### Versioning, corrected
+
+1.3.0 → 1.6.0 in two days, all of it repairs. The rule that caused it was
+"any new refusal is a minor" — wrong for this project. **A guard that becomes
+stricter to close a hole it should always have covered is a fix, not a
+feature.** From here, tightened guards are patches; minors are new tools,
+arguments or reply fields. **2.0 will be reached on capability, not by
+accumulating repairs.**
+
 ## 1.6.0
 
 ### A ref made the intent explicit. It never made the destination certain.

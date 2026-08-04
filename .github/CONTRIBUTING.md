@@ -40,6 +40,28 @@ CI runs all eighteen on Windows against Python 3.9, 3.11 and 3.13.
 When one fails, pytest prints the measurement the script printed, which
 is the part worth reading.
 
+## Versioning
+
+Corrected after 1.3.0 → 1.6.0 happened in two days, all of it defect work.
+
+The rule that caused it was *"any new refusal is a minor"*. That is wrong for
+this project. **A guard that becomes stricter to close a hole it should always
+have covered is a fix, not a feature** — the tool's whole purpose is refusing
+things that would cost somebody their work, so tightening one is repairing it.
+
+| | |
+|---|---|
+| **PATCH** `1.6.x` | fixes, including a guard that now covers a case it always should have |
+| **MINOR** `1.x.0` | a new tool, a new argument, a new reply field a caller must act on |
+| **MAJOR** `x.0.0` | a tool removed or renamed, or a reply field that changes meaning |
+
+**1.0 was reached on capability. 2.0 will be reached on capability too — not by
+accumulating repairs.**
+
+And still: at most one release a day unless something is actively costing
+somebody work. Ten releases in a week reads as instability no matter how good
+each one is, and GitHub's own abuse protection starts refusing you.
+
 ## The one rule
 
 **Measure before you claim.** Every number in the README came from

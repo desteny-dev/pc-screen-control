@@ -503,6 +503,38 @@ pruefe("force still gets through, deliberately",
        'not args.get("force")' in q)
 
 
+# ---------------------------------------------------------------------------
+print()
+print("17 - asking for the foreground is not getting it")
+#
+# Found by auditing for the pattern rather than by a report: three more places
+# called SetFocus/SetActive, threw the result away, and carried on as if it had
+# worked. Windows refuses both silently for a background process. Same family
+# as the ref path, the focus restore, and the tray icon.
+
+q = quelle(server.t_focus_window)
+pruefe("focus_window uses the robust route, not bare SetActive",
+       "_vordergrund_setzen" in q)
+pruefe("... and verifies before reporting success",
+       "_vordergrund()" in q and "in_front" in q)
+pruefe("... reports ok:False when the window did not come forward",
+       '"ok": False' in q)
+pruefe("... and does NOT declare a target it could not reach",
+       "_ziel_vergessen()" in q)
+pruefe("... says plainly not to type blind now",
+       "type blind now - nothing would land there" in q)
+
+q = quelle(server.t_close_window)
+pruefe("the Alt+F4 fallback verifies the foreground first",
+       "Refusing to send Alt+F4" in q)
+pruefe("... and sends nothing when it is wrong",
+       "Nothing was sent" in q)
+
+q = quelle(server.t_capture)
+pruefe("capture says when the window it names is covered",
+       "verdeckt" in q and "shows that window, not the one you asked for" in q)
+
+
 print()
 print("=" * 74)
 print("NUTZERFENSTER:", "ALLES GRUEN" if not fehler

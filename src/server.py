@@ -25,7 +25,7 @@ import io as _io
 import traceback
 
 SERVER_NAME = "pc-screen-control"
-SERVER_VERSION = "1.6.0"
+SERVER_VERSION = "1.6.1"
 PROTOCOL_VERSION = "2024-11-05"
 
 # MCP speaks UTF-8 in both directions. Windows does not: a pipe defaults to the
@@ -1027,20 +1027,40 @@ def t_capture(args):
     titel = args.get("window_title")
     box = None
     beschreibung = "full screen"
+    verdeckt = None
 
     if ref:
         el = _resolve(ref)
         if args.get("focus", True):
             _safe(lambda: el.SetFocus())
+            # A crop is taken from the screen by rectangle, so whatever is on
+            # top of that rectangle is what lands in the picture. Asking for
+            # focus does not guarantee the element is on top - and a picture
+            # captioned "element: Save" that shows a dialog covering it is a
+            # wrong answer delivered confidently.
+            eigen = _safe(lambda: int(el.NativeWindowHandle or 0), 0) or 0
+            if not eigen:
+                eigen = _safe(lambda: int(str(ref).partition(":")[0]), 0) or 0
+            vorne = _vordergrund()
+            if eigen and vorne and int(vorne) != eigen:
+                verdeckt = _fenstertitel(vorne) or "another window"
         box = _rect(el)
         beschreibung = "element: %s (%s)" % (
             (_safe(lambda: el.Name, "") or "?")[:60], _role(el))
     elif hwnd or titel:
         el, h = _window_by(hwnd, titel)
         if args.get("focus", True):
+            # Asking is not getting. If the window did not come forward, the
+            # picture shows whatever is on top of it - and a reply that says
+            # "window: X" while showing something else is worse than no
+            # picture. Say which one it is.
+            _safe(lambda: _vordergrund_setzen(h))
             _safe(lambda: el.SetActive())
             import time as _t
             _t.sleep(0.4)
+            vorne = _vordergrund()
+            if vorne and int(vorne) != int(h):
+                verdeckt = _fenstertitel(vorne) or "another window"
         box = _rect(el)
         beschreibung = "window: %s" % ((_safe(lambda: el.Name, "") or "?")[:60])
 
@@ -1078,6 +1098,10 @@ def t_capture(args):
     img.save(buf, "PNG", optimize=True)
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
 
+    if verdeckt:
+        beschreibung += (" - WARNING: %s is in front of it, so this picture "
+                         "shows that window, not the one you asked for"
+                         % verdeckt)
     info = "%s | original %dx%d | returned %dx%d" % (
         beschreibung, voll[0], voll[1], img.size[0], img.size[1])
     return {"_content": [
@@ -1189,12 +1213,43 @@ def t_focus_window(args):
     # the user's input, and remembers where they were, to be restored when the
     # block ends. Enforced here: there is no path that foregrounds in silence.
     _session_beruehren("bring %r to the front" % (titel or "a window"))
-    # The clearest statement of intent there is: "I want to work in this one."
-    # Everything typed blindly from here has to land in it.
+    # This used to be a bare _safe(el.SetActive()) followed by ok:True - it
+    # reported success without ever asking whether the window came forward.
+    # SetActive is refused silently for a background process, exactly like
+    # SetForegroundWindow; the robust version with the thread attachment and
+    # the foreground-lock timeout already existed here as _vordergrund_setzen,
+    # but only the restore path used it. The tool a caller actually reaches for
+    # had the naive one.
+    #
+    # That is how an assistant ends up believing it is in a terminal when it is
+    # not: it called focus_window, got ok:True, and typed. Found by auditing
+    # for this pattern rather than by another report.
+    gelungen = bool(_safe(lambda: _vordergrund_setzen(hwnd), False))
+    if not gelungen:
+        _safe(lambda: el.SetActive())          # second, weaker attempt
+        import time as _t2
+        _t2.sleep(0.08)
+        gelungen = int(_vordergrund() or 0) == int(hwnd)
+
+    if not gelungen:
+        # Do NOT declare it as the target. A declared target that is not in
+        # front is worse than none: it is what blind typing trusts.
+        _ziel_vergessen()
+        return {"ok": False, "handle": hwnd, "title": titel,
+                "in_front": False,
+                "error": "Windows did not bring %r to the front. It refuses "
+                         "that for a background process while somebody is "
+                         "using the keyboard, and it fails silently. Do NOT "
+                         "type blind now - nothing would land there. Read the "
+                         "screen, or operate the window in place with invoke / "
+                         "set_text, which need no foreground at all."
+                         % (titel or "that window")}
+
+    # Only once it is really in front does it count as the declared window.
     _ziel_setzen(hwnd, titel)
-    _safe(lambda: el.SetActive())
-    return {"ok": True, "handle": hwnd, "title": titel,
-            "note": "Foreground handed over under the guard; the user's window is "
+    return {"ok": True, "handle": hwnd, "title": titel, "in_front": True,
+            "note": "Foreground handed over under the guard, and verified - "
+                    "the window is really in front. The user's window is "
                     "restored when you end the block or after a short idle. "
                     "Prefer operating a window in the background via invoke / "
                     "set_text - only bring it to the front when you truly must."}
@@ -3731,8 +3786,24 @@ def t_close_window(args):
                 "how": "WindowPattern.Close",
                 "took_input": False}
 
+    # Alt+F4 closes whatever is in FRONT. This used to bring the window forward
+    # with a bare _safe(SetActive()) and send regardless of whether that
+    # worked - so a refused SetActive meant closing somebody else's window,
+    # which is the report "the Claude window was closed again". Verify, or do
+    # not send.
     with _eingabe_laeuft():
+        _safe(lambda: _vordergrund_setzen(h))
         _safe(lambda: el.SetActive())
+        _t.sleep(0.1)
+        vorne = _vordergrund()
+        if vorne and int(vorne) != int(h):
+            raise RuntimeError(
+                "Refusing to send Alt+F4: this window publishes no way to "
+                "close itself, so the keyboard is the only route - but %r is "
+                "in front, not %r, and Alt+F4 closes whatever is in front. "
+                "Nothing was sent. Bring the window forward yourself and try "
+                "again, or close it by hand."
+                % (_fenstertitel(vorne) or "another window", titel or "it"))
         auto.SendKeys("{Alt}{F4}")
     _t.sleep(1.0)
     noch_da = any(w["handle"] == h for w in _top_windows())
