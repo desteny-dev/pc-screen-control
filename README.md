@@ -45,16 +45,25 @@ including its tray icon. · [Full guide](docs/GUIDE.md) ·
 
 ## What it does
 
-Windows publishes what is on screen as structured data: every button, field
-and list, with its name and state. It is the same interface screen readers use.
-This hands that to your AI instead of a picture.
+A screenshot is a picture. An AI looking at one has to work out what the shapes
+mean and then aim at a pixel.
+
+Windows already publishes the same screen as **structured data** — every button,
+field and list, by name, type and state. It is what screen readers read. This
+hands your AI that instead of the picture.
+
+And a button is not clicked at a coordinate. **It is asked to press itself:**
+the application carries out its own action and reports what changed. Nothing is
+aimed at, nothing is guessed, and the confirmation is in the reply rather than
+in another screenshot.
 
 |  | screenshot + coordinates | this |
 |---|---|---|
-| find a button | guess a pixel | ask for it by name |
-| the window moved | coordinates are wrong | nothing changes |
-| did it work? | take another screenshot | the reply carries before / after |
-| your mouse | taken | usually untouched |
+| find a button | work out which shape it is, aim at a pixel | ask for it by name |
+| press it | move the mouse there and click | tell the application to invoke it |
+| the window moved | the coordinates are wrong | nothing changes — the name did not move |
+| did it work? | take another screenshot and look | the reply carries the state before and after |
+| your mouse | taken | untouched |
 
 ---
 
