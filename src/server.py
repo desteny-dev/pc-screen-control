@@ -1224,12 +1224,18 @@ def t_focus_window(args):
     # That is how an assistant ends up believing it is in a terminal when it is
     # not: it called focus_window, got ok:True, and typed. Found by auditing
     # for this pattern rather than by another report.
-    gelungen = bool(_safe(lambda: _vordergrund_setzen(hwnd), False))
+    # Polite first, forceful second. SetActive costs nothing and usually works;
+    # _vordergrund_setzen drops the foreground-lock timeout and taps Alt to
+    # convince Windows the request is not a background program stealing focus.
+    # That tap is real input, and reaching for it when it was not needed would
+    # be a side effect nobody asked for - so it only runs when the cheap way
+    # demonstrably did not.
+    import time as _t2
+    _safe(lambda: el.SetActive())
+    _t2.sleep(0.08)
+    gelungen = int(_vordergrund() or 0) == int(hwnd)
     if not gelungen:
-        _safe(lambda: el.SetActive())          # second, weaker attempt
-        import time as _t2
-        _t2.sleep(0.08)
-        gelungen = int(_vordergrund() or 0) == int(hwnd)
+        gelungen = bool(_safe(lambda: _vordergrund_setzen(hwnd), False))
 
     if not gelungen:
         # Do NOT declare it as the target. A declared target that is not in

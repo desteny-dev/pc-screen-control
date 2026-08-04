@@ -89,11 +89,29 @@ def main():
             pass
 
     server._window_by = lambda h, t: (_El(), 3737708)
-    server.t_focus_window({"window_handle": 3737708})
+    # Since 1.6.1 focus_window verifies that the window really came forward
+    # instead of reporting ok:True on hope. This bench replaces the world, so
+    # it has to answer that question too - otherwise the check falls through to
+    # the real foreground, which on a build agent is some other window, and the
+    # test measures the agent's desktop rather than the state machine.
+    echt_vordergrund = server._vordergrund
+    server._vordergrund = lambda: 3737708             # it arrived
+
+    erg = server.t_focus_window({"window_handle": 3737708})
     check("focus_window opened a guarded session", server._SESSION["offen"])
     check("focus_window warned first (no silent steal)", "warn" in signale)
     check("focus_window saved the user's spot",
           server._SESSION["gesichert"].get("hwnd") == 4242)
+    check("reports that it verified the foreground", erg.get("in_front") is True)
+
+    # And the case that matters more: the window did NOT come forward.
+    server._vordergrund = lambda: 999999              # something else is in front
+    erg = server.t_focus_window({"window_handle": 3737708})
+    check("says ok:False when the window did not come forward",
+          erg.get("ok") is False)
+    check("does not declare a target it could not reach",
+          not server._ZIEL.get("hwnd"))
+    server._vordergrund = echt_vordergrund
 
     print()
     print("3b - launch_app joins the session too (a new window steals focus)")
