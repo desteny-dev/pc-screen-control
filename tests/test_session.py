@@ -40,6 +40,17 @@ server._maus_merken = lambda: (7, 7)
 server._maus_zurueck = lambda p: True
 server._lage_merken = lambda: None
 server._leerlauf_ms = lambda: 0            # user is active -> the warn path
+# The tray writes mode.json and the watchdog re-reads it several times a
+# second. That is right in production - a tray click takes effect at once - and
+# wrong for a bench that sets pause and stop itself: a leftover file on the
+# machine overwrites them between the line that sets one and the line that
+# checks it. Only fails where that file exists, which is every real Windows
+# desktop and no build agent until somebody has used the tray once.
+#
+# So the bench gets its own LOCALAPPDATA. _steuer_lesen keeps working - section
+# 7 tests it deliberately - it just cannot reach the real user's file.
+import tempfile as _tempfile                                    # noqa: E402
+os.environ["LOCALAPPDATA"] = _tempfile.mkdtemp(prefix="psc-test-")
 
 
 def _fake_restore(z):
@@ -59,6 +70,14 @@ def reset():
                             "letzte": 0.0, "geoeffnet": 0.0, "dauer": None,
                             "nachricht": "", "explizit": False})
     server._STEUER.update({"pause": False, "stop": False, "sichtbar": False})
+    server._ZIEL.update({"hwnd": 0, "titel": "", "gesetzt": 0.0})
+    # Injected input is remembered so the server does not mistake its own
+    # keystrokes for the person's. On Windows some paths really do inject - the
+    # Alt tap that convinces the foreground-lock timeout - and a section that
+    # leaves that mark behind makes the NEXT section believe nobody is at the
+    # desk, so it locks quietly instead of warning. Found the hard way: three
+    # unrelated checks failed on CI and passed everywhere else.
+    server._INJEKTION["zuletzt"] = 0.0
 
 
 def main():
@@ -105,6 +124,10 @@ def main():
     check("reports that it verified the foreground", erg.get("in_front") is True)
 
     # And the case that matters more: the window did NOT come forward.
+    # _vordergrund_setzen is stubbed as well: the real one taps Alt to beat the
+    # foreground-lock timeout, and that is real input this bench must not emit.
+    echt_setzen = server._vordergrund_setzen
+    server._vordergrund_setzen = lambda h: False
     server._vordergrund = lambda: 999999              # something else is in front
     erg = server.t_focus_window({"window_handle": 3737708})
     check("says ok:False when the window did not come forward",
@@ -112,6 +135,7 @@ def main():
     check("does not declare a target it could not reach",
           not server._ZIEL.get("hwnd"))
     server._vordergrund = echt_vordergrund
+    server._vordergrund_setzen = echt_setzen
 
     print()
     print("3b - launch_app joins the session too (a new window steals focus)")
