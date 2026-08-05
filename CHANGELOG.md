@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.6.2
+
+**The warning was being drawn in the wrong place, and nothing could have said
+so.** On a two-monitor desktop - 3840x2160 and 1080x1920 - the glow was one
+frame of 1280x720 in the top-left corner of the big screen. Measured, not
+guessed: the overlay's own bar windows were at that size.
+
+1280x720 is not a scaling artefact. It is what Windows hands back to a process
+that asks about the desktop before the desktop is ready. The overlay asked
+exactly once, in its first line, and kept the answer for the rest of the
+session - and it is started with the first block after the app launches, which
+on a cold boot is precisely when the answer is not ready yet.
+
+The same reading is now taken again whenever the glow is about to be shown, and
+once a second for as long as it is up. That is a few microseconds, and it
+covers every way screens can change without having to name them: waking from
+sleep, a monitor switched on, resolution or scaling changed, a cable moved, a
+remote session - and the case above, where nothing changed at all and the first
+answer was simply wrong. Bars are created and retired to match; the work
+happens on the message-loop thread, because creating a window from the reader
+thread is the same mistake that hid the input hold for two releases.
+
+**And it is no longer only the eye that can catch this.** The overlay reports
+the rectangles it draws on, and `self_test` holds them against the screens
+Windows describes right now. A glow in the wrong place is a line of text, not a
+thing you have to happen to notice.
+
+This is the third time the same shape of defect has come back: *something is
+measured once, and nothing checks whether it is still true.* The first two were
+about a call whose failure was swallowed. This one is about an answer that was
+correct for nobody and was never asked again.
+
+
 ## 1.6.1
 
 ### Three more of the same, found by looking rather than by waiting

@@ -28,12 +28,13 @@ python tests/test_takeover.py      # blind input stops if the user took over
 python tests/test_restore.py       # focus is really given back, measured
 python tests/test_handover.py      # freeze, look, act, restore, release
 python tests/test_claim.py         # parking a window, and the crash rescue
+python tests/test_monitors.py      # the glow follows the screens that exist now
 python tests/measure_desktop.py    # measures the desktop you are sitting at
 python tests/stress.py             # cost, nonsense, broken protocol, ~1 min
 python src/server.py --install     # register it with your MCP client
 ```
 
-CI runs all eighteen on Windows against Python 3.9, 3.11 and 3.13.
+CI runs all nineteen on Windows against Python 3.9, 3.11 and 3.13.
 
 `pytest -q` works too and runs the same scripts as subprocesses — see
 `tests/conftest.py` for why they are scripts and not pytest functions.

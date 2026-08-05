@@ -25,7 +25,7 @@ import io as _io
 import traceback
 
 SERVER_NAME = "pc-screen-control"
-SERVER_VERSION = "1.6.1"
+SERVER_VERSION = "1.6.2"
 PROTOCOL_VERSION = "2024-11-05"
 
 # MCP speaks UTF-8 in both directions. Windows does not: a pipe defaults to the
@@ -1016,6 +1016,37 @@ def _virtueller_bildschirm():
     except Exception:
         pass
     return 0, 0, 0, 0
+
+
+def _bildschirme_text():
+    """Every monitor as 'WxH+X+Y', in the same wording the overlay uses.
+
+    Two processes, one question - where are the screens - and the answer has
+    to be the same in both. It was not, for a whole session, and the only
+    place the difference was visible was the screen itself. Written the same
+    way in both places, the difference is a string comparison.
+    """
+    import ctypes
+    import ctypes.wintypes as w
+    gefunden = []
+    try:
+        PROC = ctypes.WINFUNCTYPE(ctypes.c_int, w.HMONITOR, w.HDC,
+                                  ctypes.POINTER(w.RECT), w.LPARAM)
+
+        def _cb(hmon, hdc, lprc, lp):
+            r = lprc.contents
+            gefunden.append("%dx%d+%d+%d" % (r.right - r.left,
+                                             r.bottom - r.top,
+                                             r.left, r.top))
+            return 1
+
+        ctypes.windll.user32.EnumDisplayMonitors(0, None, PROC(_cb), 0)
+    except Exception:
+        pass
+    if not gefunden:
+        x, y, cx, cy = _virtueller_bildschirm()
+        gefunden = ["%dx%d+%d+%d" % (cx, cy, x, y)]
+    return ";".join(gefunden)
 
 
 def t_capture(args):
@@ -2054,6 +2085,13 @@ def _overlay_lesen():
                 # process that can know. Before this the server announced a
                 # hold it had merely asked for.
                 _OVERLAY["haelt"] = wort.endswith("1")
+            elif wort.startswith("monitors|"):
+                # Where the glow actually is. It was silently wrong for a
+                # whole session once - one 1280x720 frame in the corner of a
+                # 3840x2160 screen - and nothing anywhere could have said so,
+                # because the only witness was the eye. Now it is a number
+                # self_test can read out loud.
+                _OVERLAY["monitore"] = wort.split("|", 1)[1]
     except Exception:
         pass
 
@@ -3595,6 +3633,23 @@ def t_self_test(args):
                             else "missing"),
            "Without it, actions still work but you get no warning before your "
            "input is held. Reinstall to restore it.")
+
+    # Does the warning land on your screens, or somewhere else? The overlay
+    # reports the rectangles it is drawing on as soon as it shows the glow, so
+    # this is compared against the screens Windows describes right now. It is
+    # the one check here that can only answer after the glow has been up once.
+    gemeldet = _OVERLAY.get("monitore")
+    echt = _bildschirme_text()
+    pruefe("Is the warning drawn around your actual screens?",
+           gemeldet is None or gemeldet == echt,
+           ("not measured yet - run any action once, then self_test again"
+            if gemeldet is None else
+            ("%s (Windows says %s)" % (gemeldet, echt)
+             if gemeldet != echt else gemeldet)),
+           "The glow is being drawn somewhere other than your screens, so a "
+           "takeover can start without you seeing it. Quit the app completely, "
+           "tray icon included, and start it again - the overlay re-measures "
+           "on every block, so this should not survive a restart.")
 
     # --- writable places ---------------------------------------------------
     schreibbar = False

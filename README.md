@@ -167,7 +167,7 @@ and are reached with `capture` and `click` instead.
 
 ## Verification
 
-Every claim on this page has a test behind it. 18 test files run in CI on
+Every claim on this page has a test behind it. 19 test files run in CI on
 Python 3.9, 3.11 and 3.13, and each release is checked against its own source
 automatically: the published packages are downloaded and compared byte for byte
 with the code at their tag.

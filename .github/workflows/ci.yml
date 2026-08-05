@@ -99,6 +99,9 @@ jobs:
       - name: Claimed windows are parked safely and rescued
         run: python tests/test_claim.py
 
+      - name: The warning is drawn around the screens that exist now
+        run: python tests/test_monitors.py
+
       - name: Protocol handshake and tool list
         shell: python
         run: |

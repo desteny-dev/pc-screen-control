@@ -541,6 +541,10 @@ class Guard(object):
         self.monitore = monitore()
         self.bars = [Bar(s, m) for m in self.monitore
                      for s in ("top", "bottom", "left", "right")]
+        self.reserve = []             # bar windows a smaller layout left over
+        self.hinst = None             # kept so bars can be built later
+        self.klasse = None
+        self.monitore_geprueft = 0.0
         self.zustand = "off"          # off warn hold release wait
         self.start = 0.0
         self.lock_seit = 0.0
@@ -652,6 +656,61 @@ class Guard(object):
         cx, cy, cw, ch = self._karte_rect()
         return cx <= x <= cx + cw and cy <= y <= cy + ch
 
+    # ---- the screens themselves ------------------------------------------
+    def monitore_pruefen(self):
+        """Re-read the screens, and rebuild the bars if they moved.
+
+        Measured on the author's desktop: two monitors, 3840x2160 and
+        1080x1920, and the overlay was drawing ONE frame of 1280x720 in the
+        top-left corner. Not a scaling error - 1280x720 is what Windows hands
+        back to a process that asked before the desktop was ready. The overlay
+        had asked once, at startup, and kept the answer for the rest of the
+        session. It is started with the first block after the app launches,
+        which on a cold boot is exactly when the answer is not ready yet.
+
+        So the reading is no longer kept. It is taken again whenever the glow
+        is about to be shown, which is the only moment it has to be right, and
+        costs a few microseconds. Every reason the screens can change is
+        covered by that without naming any of them: waking from sleep, a
+        monitor switched on, resolution or scaling changed, a cable moved, a
+        remote session - and the case above, where nothing changed at all and
+        the first answer was simply wrong.
+
+        Must run on the message-loop thread: it creates windows.
+        """
+        self.monitore_geprueft = time.time()
+        jetzt = monitore()
+        if jetzt == self.monitore:
+            return False
+        self.monitore = jetzt
+        alt = self.bars
+        self.bars = []
+        vorrat = list(alt) + list(self.reserve)
+        for m in jetzt:
+            for s in ("top", "bottom", "left", "right"):
+                if vorrat:
+                    b = vorrat.pop(0)
+                    b.seite, b.monitor = s, m
+                    b.zwischenspeicher = None      # geometry changed
+                else:
+                    b = Bar(s, m)
+                    if self.hinst and self.klasse:
+                        b.erzeugen(self.hinst, self.klasse, self._wndproc)
+                self.bars.append(b)
+        # Fewer screens than before: the spare windows are hidden, not
+        # destroyed. Destroying them would need care about which thread owns
+        # them; keeping them costs nothing and they are reused if a screen
+        # comes back.
+        self.reserve = vorrat
+        for b in self.reserve:
+            b.zeigen(False)
+        if self.sichtbar:
+            for b in self.bars:
+                b.zeigen(True)
+        _sende("monitors|" + ";".join("%dx%d+%d+%d" % (w_, h_, x_, y_)
+                                      for x_, y_, w_, h_ in jetzt))
+        return True
+
     # ---- animation -------------------------------------------------------
     def _alle_zeigen(self, an):
         self.sichtbar = bool(an)
@@ -667,6 +726,14 @@ class Guard(object):
         # place a low-level hook may be installed or removed.
         self._haken_anwenden()
         jetzt = time.time()
+        # Same reason, same thread: creating a bar window belongs here and
+        # nowhere else. The commands from the server run on the reader thread
+        # and only stamp the clock, so the check happens on the very next
+        # frame - within 16ms of the glow appearing, and then once a second
+        # for as long as it is up, because a screen can also be switched off
+        # while the block is running.
+        if self.zustand != "off" and jetzt - self.monitore_geprueft > 1.0:
+            self.monitore_pruefen()
         # Nothing held, nothing announced - so nothing may be on screen. Found
         # on a real desktop: an overlay left over from an earlier server sat
         # with all four bars glowing and nothing holding. A glow that means
@@ -737,6 +804,7 @@ class Guard(object):
     # ---- commands from the server ---------------------------------------
     def warn(self):
         _set_farbe(RED)                 # active user: the pulse starts red
+        self.monitore_geprueft = 0.0    # re-read the screens on the next tick
         self._alle_zeigen(True)
         self.start = time.time()
         self._zustand("warn")
@@ -744,6 +812,7 @@ class Guard(object):
     def lock(self):
         """No announcement - user is idle. Straight to hold, quietly blue."""
         _set_farbe(BLUE)
+        self.monitore_geprueft = 0.0    # re-read the screens on the next tick
         self._alle_zeigen(True)
         self._zustand("hold")
 
@@ -755,6 +824,7 @@ class Guard(object):
             self.lock_seit = time.time()
 
     def wait_on(self):
+        self.monitore_geprueft = 0.0    # re-read the screens on the next tick
         self._alle_zeigen(True)
         self.zustand = "wait"
         self._zeichne(THICKNESS, 0.5)
@@ -806,6 +876,7 @@ def main():
         fehler = ctypes.get_last_error()
         if fehler not in (0, 1410):
             raise ctypes.WinError(fehler)
+    guard.hinst, guard.klasse = hinst, klasse
     for b in guard.bars:
         b.erzeugen(hinst, klasse, guard._wndproc)
     _tray_hinzufuegen(guard.bars[0].hwnd)     # tray icon hosts the notifications
