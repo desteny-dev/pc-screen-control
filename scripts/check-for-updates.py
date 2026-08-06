@@ -28,7 +28,7 @@ import ssl
 import sys
 import urllib.request
 
-RELEASE_API = ("https://api.github.com/repos/nathandevelopment/"
+RELEASE_API = ("https://api.github.com/repos/desteny-dev/"
                "pc-screen-control/releases/latest")
 THIS_VERSION_FALLBACK = "1.1.0"
 

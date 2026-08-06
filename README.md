@@ -177,7 +177,7 @@ Run them yourself: `python -m pytest -q`, or any single file directly —
 
 <sub>[Changelog](CHANGELOG.md) · [Security](.github/SECURITY.md) ·
 [Contributing](.github/CONTRIBUTING.md) · [Other clients](docs/OTHER_CLIENTS.md)
-· MIT © 2026 NATHAN Development</sub>
+· MIT © 2026 Desteny Development</sub>
 
 ---
 
