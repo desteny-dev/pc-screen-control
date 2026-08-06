@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.6.3
+
+**The maker has a different name.** NATHAN Development is now Desteny
+Development, under the same roof as the rest of the work rather than beside it.
+Nothing in the program changed: same 34 tools, same behaviour, same tests.
+
+This is a release and not a quiet edit for one reason. The name sits inside the
+package, in `manifest.json` - so the moment it changed, the code and the
+published 1.6.2 disagreed while both called themselves 1.6.2. Two different
+files with the same version number is worse than any naming question: after
+that, nobody can say which one they have.
+
+The repository keeps its name. `pc-screen-control` is the product, not the
+maker. Commits made before the rename still carry the old one; the brand was
+renamed, the past was not.
+
+
 ## 1.6.2
 
 **The warning was being drawn in the wrong place, and nothing could have said
