@@ -15,7 +15,12 @@ client points at the exact same server directly.
 
 ## Step 1 — get the files (once)
 
-**Fastest way — one command does both steps:**
+**Fastest way: download `pc-screen-control-setup.zip` and extract it.** That is
+already `server.py` with its `lib/` beside it — nothing to unpack out of another
+format, nothing to install. `INSTALL.bat` in that folder does Step 2 for the
+clients that read a config file directly.
+
+If you only have the `.mcpb`, one command does both steps:
 
 ```
 python scripts/unpack-for-any-client.py pc-screen-control.mcpb C:\Tools\psc
@@ -66,20 +71,33 @@ Replace the path with yours. Use forward slashes, or doubled backslashes
 (`C:\\Tools\\...`). If `python` is not on your PATH, put the full path to
 `python.exe` in `command`.
 
-### ChatGPT desktop / Codex — one command
+### ChatGPT desktop / Codex — nothing extra to run
 
 The desktop app runs **local stdio servers**; it does not need a URL and nothing
-gets hosted. It reads `~/.codex/config.toml`, and this writes the entry for you:
+gets hosted. It reads `~/.codex/config.toml`, and **`INSTALL.bat` already writes
+that entry** — the same run that registers Claude. There is no second script and
+no GPT-specific download any more.
+
+> This used to be `scripts/install-for-gpt.py`, in a package called
+> `pc-screen-control-gpt.zip`. The name was the problem: that package is also the
+> only route that still works when Claude refuses to install the extension, and
+> every Claude user read "for GPT" and closed it again. One installer now writes
+> every client, and the package is called `-setup.zip`.
+
+By hand instead:
 
 ```
-python scripts/install-for-gpt.py C:\Tools\psc
+python server.py --install
 ```
 
-It starts the server once and counts its tools **before** writing anything,
-backs the config up, adds or updates exactly one `[mcp_servers.pc-screen-control]`
-block, and leaves every other line — your other MCP servers, your model
-settings — untouched. Then restart ChatGPT and ask it:
+It backs the config up, adds or updates exactly one
+`[mcp_servers.pc-screen-control]` block, reads the file back before calling it
+a success, and leaves every other line — your other MCP servers, your model
+settings, your keys — untouched. Then restart ChatGPT and ask it:
 *"Use describe_screen and tell me which windows are open."*
+
+If `~/.codex` does not exist, it says `skipped` and creates nothing. Start Codex
+once so it makes that folder, then run the installer again.
 
 By hand instead: **Settings → MCP servers → Add server → STDIO**, name it, and
 give it the full path to `python.exe` and to `server.py`.

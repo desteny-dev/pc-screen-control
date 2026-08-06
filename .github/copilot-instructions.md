@@ -6,10 +6,12 @@
 
 ## Start here
 
-**Current state:** v1.6.0 is released. 34 tools, 18 test files in CI on Python
-3.9 / 3.11 / 3.13, all green. Two packages ship: `.mcpb` for Claude Desktop and
-`.zip` with a setup script for ChatGPT desktop, Codex, Cursor, VS Code, Cline
-and Zed — same server inside both.
+**Current state:** v1.7.0 is released. 34 tools, 19 test files in CI on Python
+3.9 / 3.11 / 3.13, all green. Two packages ship: `pc-screen-control.mcpb`, a
+one-click first install for Claude Desktop, and `pc-screen-control-setup.zip`
+with `INSTALL.bat`, which registers every MCP client it finds — Claude Desktop,
+the Store build, Claude Code and Codex — and is the only route that still works
+once Claude has blocked extension installs. Same server inside both.
 
 Three releases in a row came from the same place: what the guard protects and
 what a person actually loses were not the same list.

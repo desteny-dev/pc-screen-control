@@ -25,7 +25,7 @@ import io as _io
 import traceback
 
 SERVER_NAME = "pc-screen-control"
-SERVER_VERSION = "1.6.3"
+SERVER_VERSION = "1.7.0"
 PROTOCOL_VERSION = "2024-11-05"
 
 # MCP speaks UTF-8 in both directions. Windows does not: a pipe defaults to the
@@ -4337,6 +4337,28 @@ def _config_candidates():
         if appdata:
             out.append(("Claude Desktop", os.path.join(
                 appdata, "Claude", "claude_desktop_config.json")))
+        # Claude Desktop installed from the Microsoft Store is an MSIX package,
+        # and a packaged app does not see %APPDATA% - Windows redirects it into
+        # the package's own container. It therefore reads a DIFFERENT file of
+        # the same name, and writing only the one above is a silent no-op: the
+        # installer reports "updated", the config really did change, and the
+        # server never appears.
+        #
+        # Measured on a machine where it happened, as a clean A/B: writing the
+        # outer file left the server unconnected after a restart; writing the
+        # container file connected it. Same content, same restart.
+        #
+        # Both are written when both exist. A user can have the Store build and
+        # the classic build side by side, and neither of them should be the one
+        # that quietly gets nothing.
+        lokal = os.environ.get("LOCALAPPDATA")
+        if lokal:
+            import glob as _glob
+            muster = os.path.join(lokal, "Packages", "Claude*", "LocalCache",
+                                  "Roaming", "Claude",
+                                  "claude_desktop_config.json")
+            for pfad in sorted(_glob.glob(muster)):
+                out.append(("Claude Desktop (Store)", pfad))
     elif sys.platform == "darwin":
         out.append(("Claude Desktop", os.path.join(
             os.path.expanduser("~"), "Library", "Application Support",
@@ -4389,6 +4411,17 @@ def _install_copy_self():
     Copy the server and everything it loads at runtime to a stable location,
     so the config keeps working after the downloaded folder is moved or
     deleted - which is the first thing most people do.
+
+    "Everything it loads at runtime" includes lib/. That sentence stood here
+    for six versions while the line that copies lib/ did not exist, and it
+    was harmless only because nobody installed from an unpacked package yet:
+    the config would point at a copied server.py whose imports had been left
+    behind, and the client would report a server that starts and dies. The
+    fifth defect of this shape in this project - something is written, and
+    nothing checks whether what it needs arrived with it.
+
+    A source checkout has no lib/ and needs none; there the libraries live in
+    the machine's own Python, put there by _ensure_dependencies.
     """
     import shutil
     quelle = os.path.dirname(os.path.abspath(__file__))
@@ -4402,6 +4435,25 @@ def _install_copy_self():
         p = os.path.join(quelle, name)
         if os.path.isfile(p):
             shutil.copy2(p, os.path.join(INSTALL_DIR, name))
+
+    # The vendored libraries, if this is an unpacked package.
+    #
+    # Copied OVER what is there, not after wiping it. The first version wiped
+    # first, which is the tidier idea and the wrong one on Windows: a .pyd
+    # held open by a server that is still running cannot be deleted, rmtree
+    # with ignore_errors swallows that, the folder survives half-empty, and
+    # the copy then fails on a directory that already exists. The result is a
+    # working installation turned into a broken one BY a run that the file
+    # beside this one calls "safe to run more than once".
+    #
+    # What this costs: a file that a newer version stopped shipping stays
+    # behind. That is a stale file next to a working install, against losing
+    # the install outright. The trade is deliberate and this comment is the
+    # place it is written down.
+    lib_quelle = os.path.join(quelle, "lib")
+    if os.path.isdir(lib_quelle):
+        lib_ziel = os.path.join(INSTALL_DIR, "lib")
+        shutil.copytree(lib_quelle, lib_ziel, dirs_exist_ok=True)
     return dst
 
 
@@ -4469,6 +4521,257 @@ def _install_write_config(label, path, server_path):
     return ("updated" if existed else "added"), path
 
 
+def _toml_string(s):
+    """One TOML basic string. Backslashes and quotes escaped.
+
+    Windows paths are nothing but backslashes, and getting this wrong writes a
+    config that parses to a different path than the one printed on screen -
+    after which the client fails with a message about a file nobody ever typed.
+    """
+    return '"%s"' % s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _codex_block(server_path):
+    return "\n".join([
+        "[mcp_servers.%s]" % SERVER_NAME,
+        "command = %s" % _toml_string(sys.executable),
+        "args = [%s]" % _toml_string(server_path),
+        "startup_timeout_sec = 30",
+        "tool_timeout_sec = 120",
+        "",
+    ])
+
+
+def _ist_tabellenkopf(zeile):
+    """Is this line a TOML table header - [a.b] or [[a.b]] - and not a line of
+    some array that happens to start with a bracket?
+
+    The difference decides where somebody else's config gets cut. The first
+    version of this asked `lstrip().startswith("[")`, which is also true of
+
+        args = [
+          "PATH",
+        ]
+
+    written across lines, and of the `]` that closes it. Replacing our block
+    then ended in the middle of that array and left its tail behind as garbage,
+    turning a working config into one no parser reads - taking every other MCP
+    server on the machine with it, while the installer reported success.
+    """
+    import re as _re
+    z = zeile.strip()
+    if not z.startswith("["):
+        return False
+    return bool(_re.match(r"^\[\[?[^\[\]]+\]\]?\s*(#.*)?$", z))
+
+
+def _codex_block_ersetzen(alt, block):
+    """Replace our table and nothing else. Returns (neuer_text, war_schon_da).
+
+    Everything from our exact header line down to the next table header belongs
+    to us; every other line - other MCP servers, model settings, API keys - is
+    handed back exactly as it was found. Lines inside a multi-line array are
+    never mistaken for a header (see _ist_tabellenkopf).
+    """
+    kopf = "[mcp_servers.%s]" % SERVER_NAME
+    zeilen = alt.splitlines(True)
+    if not any(z.strip() == kopf for z in zeilen):
+        return None, False
+
+    neu, drin, klammern = [], False, 0
+    for zeile in zeilen:
+        if not drin and zeile.strip() == kopf:
+            drin = True
+            klammern = 0
+            neu.append(block)
+            continue
+        if drin:
+            if klammern <= 0 and _ist_tabellenkopf(zeile):
+                drin = False
+                neu.append(zeile)
+                continue
+            klammern += zeile.count("[") - zeile.count("]")
+            continue
+        neu.append(zeile)
+    return "".join(neu), True
+
+
+def _install_write_codex(server_path):
+    """Register with ChatGPT desktop / Codex, which reads TOML, not JSON.
+
+    This lives inside the installer rather than in a script of its own because
+    of what a script of its own cost: the download was named for GPT, so every
+    Claude user read the name and skipped it - and it was the one package that
+    still worked after Claude refused to install the extension. The rescue was
+    sitting in plain sight behind a name that said "not for you".
+
+    One entry point now writes every client it finds, and says per client what
+    happened, so "it says done but nothing appeared" cannot survive a run.
+
+    The directory is never created. A missing ~/.codex means Codex is not
+    installed, and planting a config folder for a program somebody does not
+    have is litter, not service.
+    """
+    import shutil
+    home = os.path.expanduser("~")
+    if not home or home == "~":
+        return "skipped", "no home directory"
+    ordner = os.path.join(home, ".codex")
+    if not os.path.isdir(ordner):
+        return "skipped", ("no ~/.codex - if you do use Codex, start it "
+                           "once so it creates that folder, then run "
+                           "this again")
+    path = os.path.join(ordner, "config.toml")
+
+    kopf = "[mcp_servers.%s]" % SERVER_NAME
+    block = _codex_block(server_path)
+
+    alt = ""
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8-sig") as fh:
+                alt = fh.read()
+        except Exception as e:
+            return "failed", "could not be read (%s) - not touched" % e
+        # The pristine backup is written once and never overwritten, for the
+        # same reason as on the JSON side: a second run must not destroy the
+        # one copy that still shows the state before this software existed.
+        if not os.path.isfile(path + ".backup"):
+            try:
+                shutil.copy2(path, path + ".backup")
+            except Exception as e:
+                return "failed", ("no backup could be made (%s) - not touched"
+                                  % e)
+
+    ersetzt, war_da = _codex_block_ersetzen(alt, block)
+    if war_da:
+        inhalt = ersetzt
+    else:
+        # The header is not there AS A LINE. It may still be there as text - in
+        # a comment, or inside a string - and that is exactly the case the first
+        # version of this got wrong: it decided with `kopf in alt` and replaced
+        # with an exact line match, so a commented-out attempt made it report
+        # "updated" while writing nothing at all. Deciding and replacing now use
+        # the same test, and appending is what happens when it is absent.
+        if not alt or alt.endswith("\n\n"):
+            trenner = ""
+        elif alt.endswith("\n"):
+            trenner = "\n"
+        else:
+            trenner = "\n\n"
+        inhalt = alt + trenner + block
+
+    # Temporary file and replace, so an interrupted write can never leave a
+    # truncated config behind. This file is not ours and may hold API keys.
+    tmp = path + ".tmp"
+
+    def schreiben(text):
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+
+    try:
+        schreiben(inhalt)
+    except Exception as e:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+        if isinstance(e, PermissionError):
+            return "failed", ("no write permission - close Codex / ChatGPT "
+                              "completely and run this again")
+        return "failed", str(e)
+
+    # Read it back and PARSE it. Searching the text for our own header proves
+    # only that our own header is in the text; it does not prove the file is
+    # still a config. A broken config.toml does not cost the person this one
+    # server, it costs them every MCP server they have - so if what came out
+    # does not parse, the file they started with goes back in, and this reports
+    # a failure instead of a success.
+    #
+    # tomllib is Python 3.11 and up. Below that the checks are the ones that can
+    # be made without a parser, said plainly rather than skipped in silence.
+    try:
+        with open(path, "r", encoding="utf-8-sig") as fh:
+            zurueck = fh.read()
+    except Exception as e:
+        return "failed", "written, but could not be re-read (%s)" % e
+
+    try:
+        import tomllib as _toml
+    except ImportError:
+        _toml = None
+
+    if _toml is not None:
+        try:
+            geparst = _toml.loads(zurueck)
+        except Exception as e:
+            try:
+                schreiben(alt) if alt else os.remove(path)
+                zurueckgesetzt = "your previous config was put back"
+            except Exception:
+                zurueckgesetzt = ("and it could NOT be put back - the copy is "
+                                  "at %s.backup" % path)
+            return "failed", ("the result would not have parsed (%s), %s"
+                              % (e, zurueckgesetzt))
+        eintrag = (geparst.get("mcp_servers") or {}).get(SERVER_NAME) or {}
+        if list(eintrag.get("args") or []) != [server_path]:
+            return "failed", ("written, but the entry did not read back "
+                              "(args are %r)" % (eintrag.get("args"),))
+    else:
+        if not any(z.strip() == kopf for z in zurueck.splitlines()):
+            return "failed", "written, but the entry did not read back"
+        if _toml_string(server_path) not in zurueck:
+            return "failed", "written, but the path did not read back"
+
+    return ("updated" if war_da else "added"), path
+
+
+def _deinstall_codex():
+    """Take our block back out of ~/.codex/config.toml.
+
+    Here because --install writes four clients and --uninstall used to clean up
+    three, while saying "every MCP client". What stayed behind was an entry
+    pointing at a server.py that had just been deleted - so Codex would try to
+    start a missing file at every launch, and the person had been told it was
+    gone.
+    """
+    import shutil
+    home = os.path.expanduser("~")
+    if not home or home == "~":
+        return "skipped", "no home directory"
+    path = os.path.join(home, ".codex", "config.toml")
+    if not os.path.isfile(path):
+        return "skipped", "Codex has no config here"
+    try:
+        with open(path, "r", encoding="utf-8-sig") as fh:
+            alt = fh.read()
+    except Exception as e:
+        return "failed", "could not be read (%s) - not touched" % e
+
+    kopf = "[mcp_servers.%s]" % SERVER_NAME
+    if not any(z.strip() == kopf for z in alt.splitlines()):
+        return "skipped", "no entry of ours in it"
+
+    # Same scan as when writing: our block ends at the next table header, and a
+    # line inside an array is not one.
+    leer, _ = _codex_block_ersetzen(alt, "")
+    try:
+        shutil.copy2(path, path + ".before-uninstall")
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(leer)
+        os.replace(tmp, path)
+        with open(path, "r", encoding="utf-8-sig") as fh:
+            if any(z.strip() == kopf for z in fh.read().splitlines()):
+                return "failed", "entry is still there after writing"
+    except Exception as e:
+        if isinstance(e, PermissionError):
+            return "failed", "close Codex completely and try again"
+        return "failed", str(e)
+    return "removed", path
+
+
 def _install_selftest():
     try:
         import uiautomation as _a  # noqa: F401 - presence is the check
@@ -4521,20 +4824,49 @@ def _install():
     _say("        ok")
 
     _say("  [4/4] Registering with MCP clients ...")
-    any_ok = False
+    geschrieben = []
     for label, path in CONFIG_CANDIDATES:
         state, detail = _install_write_config(label, path, server_path)
+        geschrieben.append((label, state, detail))
+
+    # ChatGPT desktop / Codex keeps its servers in TOML, not JSON, so it
+    # cannot share the loop above. It is registered HERE, by this installer,
+    # rather than by a second download named after one client. That name was
+    # the bug: the package that still works when Claude refuses to install
+    # an extension was called "for GPT", so the people who needed it most
+    # never opened it.
+    state, detail = _install_write_codex(server_path)
+    geschrieben.append(("Codex / ChatGPT", state, detail))
+
+    any_ok = False
+    for label, state, detail in geschrieben:
         if state in ("added", "updated"):
             any_ok = True
-            _say("        %-16s %s   %s" % (label, state, detail))
+            _say("        %-22s %s   %s" % (label, state, detail))
         elif state == "skipped":
-            _say("        %-16s skipped (%s)" % (label, detail))
+            _say("        %-22s skipped (%s)" % (label, detail))
         else:
-            _say("        %-16s FAILED - %s" % (label, detail))
+            _say("        %-22s FAILED - %s" % (label, detail))
+
+    # A Store install that got nothing written into its container is the one
+    # failure this installer used to report as success. It is named here rather
+    # than left to the person to discover, because there is nothing on screen
+    # that would ever tell them: the config was updated, the file is right
+    # there, and the server simply is not in Claude.
+    _install_warn_store(any_store_written=any(
+        label == "Claude Desktop (Store)" and state in ("added", "updated")
+        for label, state, _ in geschrieben))
 
     _say()
     if any_ok:
-        _say("  Done. Restart Claude, then ask it to run describe_screen.")
+        # Name them. "Restart Claude" after a run in which Claude was skipped
+        # and only Codex was written is an instruction to restart the wrong
+        # program, and it reads like confirmation that Claude got something.
+        dabei = [l for l, s, _ in geschrieben if s in ("added", "updated")]
+        _say("  Done: %s." % ", ".join(dabei))
+        _say("  Restart %s completely - tray icon included - then ask it to"
+             % ("it" if len(dabei) == 1 else "them"))
+        _say("  run describe_screen.")
     else:
         _say("  No MCP client found. Add this to your client config yourself:")
         _say()
@@ -4542,6 +4874,40 @@ def _install():
             "command": sys.executable, "args": [server_path]}}}, indent=2))
     _say()
     return 0
+
+
+def _install_warn_store(any_store_written):
+    """Say it out loud when Claude is installed from the Store and its own
+    config was NOT among the files written.
+
+    This is the one way this installer could report success and still leave the
+    person with nothing, so it gets its own check rather than a comment. It
+    looks for the package folder, not for the config file: the folder existing
+    is what proves the Store build is on the machine, and the config file
+    missing is precisely the case that needs saying.
+    """
+    if sys.platform != "win32" or any_store_written:
+        return
+    lokal = os.environ.get("LOCALAPPDATA")
+    if not lokal:
+        return
+    import glob as _glob
+    pakete = _glob.glob(os.path.join(lokal, "Packages", "Claude*"))
+    if not pakete:
+        return
+    _say()
+    _say("  NOTE: Claude Desktop appears to be the Microsoft Store version.")
+    _say("        A Store app does not read %APPDATA% - Windows redirects it")
+    _say("        into the package's own folder, so the file just written is")
+    _say("        not the file Claude reads. Its config belongs here:")
+    for p in sorted(pakete):
+        _say("          %s" % os.path.join(
+            p, "LocalCache", "Roaming", "Claude",
+            "claude_desktop_config.json"))
+    _say("        That file did not exist, so nothing was written to it. Start")
+    _say("        Claude once so it creates the file, then run this again.")
+    _say("        (The same redirect is why .mcpb extensions cannot install on")
+    _say("        the Store build at all - that one has no workaround here.)")
 
 
 def _deinstall_config(label, path):
@@ -4599,7 +4965,12 @@ def _uninstall():
     _say("  [1/2] Removing the entry from every MCP client ...")
     for label, path in CONFIG_CANDIDATES:
         zustand, detail = _deinstall_config(label, path)
-        _say("        %-16s %-8s %s" % (label, zustand, detail))
+        _say("        %-22s %-8s %s" % (label, zustand, detail))
+    # Codex too, or "every MCP client" is a sentence with three of four
+    # behind it - and the one left over would point at a server.py that this
+    # same run is about to delete.
+    zustand, detail = _deinstall_codex()
+    _say("        %-22s %-8s %s" % ("Codex / ChatGPT", zustand, detail))
 
     _say("  [2/2] Deleting %s" % INSTALL_DIR)
     if os.path.isdir(INSTALL_DIR):

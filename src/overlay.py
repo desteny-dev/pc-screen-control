@@ -545,6 +545,7 @@ class Guard(object):
         self.hinst = None             # kept so bars can be built later
         self.klasse = None
         self.monitore_geprueft = 0.0
+        self.monitore_gemeldet = False  # has the server been told even once
         self.zustand = "off"          # off warn hold release wait
         self.start = 0.0
         self.lock_seit = 0.0
@@ -681,6 +682,14 @@ class Guard(object):
         self.monitore_geprueft = time.time()
         jetzt = monitore()
         if jetzt == self.monitore:
+            # Nothing moved - but the FIRST reading still has to be said out
+            # loud. It was not, and self_test therefore reported "not measured
+            # yet" after a block that had measured perfectly well. A check that
+            # only speaks when something is wrong cannot be told apart from a
+            # check that is not running, which is the whole failure this line
+            # was written to prevent. Found by the check on itself.
+            if not self.monitore_gemeldet:
+                self._monitore_melden(jetzt)
             return False
         self.monitore = jetzt
         alt = self.bars
@@ -707,9 +716,15 @@ class Guard(object):
         if self.sichtbar:
             for b in self.bars:
                 b.zeigen(True)
-        _sende("monitors|" + ";".join("%dx%d+%d+%d" % (w_, h_, x_, y_)
-                                      for x_, y_, w_, h_ in jetzt))
+        self._monitore_melden(jetzt)
         return True
+
+    def _monitore_melden(self, schirme):
+        """Say where the glow is being drawn, in the wording self_test compares
+        against. Sent on the first reading and on every change after it."""
+        self.monitore_gemeldet = True
+        _sende("monitors|" + ";".join("%dx%d+%d+%d" % (w_, h_, x_, y_)
+                                      for x_, y_, w_, h_ in schirme))
 
     # ---- animation -------------------------------------------------------
     def _alle_zeigen(self, an):

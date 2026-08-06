@@ -24,22 +24,33 @@
 ## Install
 
 Needs Windows and [Python 3.9+](https://www.python.org/downloads/) — tick
-**"Add python.exe to PATH"** during its setup. Then take the one download for
-your AI. Same server inside both.
+**"Add python.exe to PATH"** during its setup. Two downloads, the same server
+inside both. Take either.
 
-**Claude Desktop** — download **`pc-screen-control.mcpb`**, then
-Settings → Extensions → Advanced → Install extension → restart Claude.
+**`pc-screen-control-setup.zip` — works everywhere.** Extract it, double-click
+**`INSTALL.bat`**, restart your AI. One run registers every MCP client it finds
+and prints a line per client saying `added`, `updated` or `skipped`: Claude
+Desktop, Claude Desktop from the Microsoft Store, Claude Code, and ChatGPT
+desktop / Codex. For Cursor, VS Code, Cline and Zed — which want a config block
+pasted in — `print-config.py` beside it prints that block with your real path
+already filled in.
 
-**ChatGPT desktop, Codex, Cursor, VS Code, Cline, Zed** — download
-**`pc-screen-control-gpt.zip`**, extract it, double-click
-**`INSTALL-FOR-GPT.bat`**, restart the app.
+**`pc-screen-control.mcpb` — one click, Claude Desktop only.** Settings →
+Extensions → Advanced → Install extension → restart Claude. Convenient for a
+**first** install. It cannot repair a broken one: if Claude answers *"Private
+dir leaf redirects (junction/substitute-name plant)"*, then no version of this
+file will install — not the new one, not the old one you had before. The block
+is in Claude, not in the package. Use the `.zip`; that route is unaffected
+([why](docs/WINDOWS-EXTENSIONS.md)).
 
 Then ask your AI to run **`self_test`**. It reports what works, and every
 failure names its own fix.
 
-<sub>Upgrading: remove the old version first and quit the app completely,
-including its tray icon. · [Full guide](docs/GUIDE.md) ·
-[Other clients](docs/OTHER_CLIENTS.md) · [If your antivirus objects](docs/ANTIVIRUS.md)</sub>
+<sub>**Upgrading: install straight over the old version. Do not uninstall
+first** — on Windows that is the step that leaves Claude unable to install the
+extension again. Quit the app completely, tray icon included, then install. ·
+[Full guide](docs/GUIDE.md) · [Other clients](docs/OTHER_CLIENTS.md) ·
+[If your antivirus objects](docs/ANTIVIRUS.md)</sub>
 
 ---
 

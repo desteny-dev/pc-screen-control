@@ -1,5 +1,67 @@
 # Changelog
 
+## 1.7.0
+
+**The instructions did the damage.** "Remove the old version first" stood in
+this README for six releases. On Windows that sentence is the one action that
+stops Claude from ever installing the extension again:
+
+```
+Installation der Erweiterung fehlgeschlagen
+Private dir leaf redirects (junction/substitute-name plant):
+C:\Users\<you>\AppData\Roaming\Claude\Claude Extensions
+```
+
+Measured on the machine it happened to: no version installs afterwards - not
+the new one, not the old one that had worked an hour earlier. So it is not the
+package, and reinstalling Claude does not help either, because the state lives
+in the profile. It is [claude-code#67919](https://github.com/anthropics/claude-code/issues/67919),
+open since June 2026. The README now says the opposite, and
+`docs/WINDOWS-EXTENSIONS.md` carries the message in full so a search for it
+lands somewhere useful.
+
+**One installer, every client.** `pc-screen-control-gpt.zip` with
+`INSTALL-FOR-GPT.bat` inside it was the only route that still works once the
+extension is blocked - and it was named so that every Claude user decided it
+was not meant for them. The rescue was in plain sight behind a label saying
+*not for you*.
+
+- `pc-screen-control-gpt.zip` → **`pc-screen-control-setup.zip`**
+- `INSTALL-FOR-GPT.bat` → **`INSTALL.bat`**
+
+Renaming alone would have been worse than leaving it. The old script wrote
+`~/.codex/config.toml` and nothing else - a Claude user double-clicking a file
+called `INSTALL.bat` would have got a success message and no server. So the
+Codex entry moved into `server.py --install`, which already wrote the Claude
+configs. One run now registers every client it finds and prints a line per
+client - `added`, `updated` or `skipped` - so "it said done and nothing
+appeared" cannot survive a run. `scripts/install-for-gpt.py` is gone; there is
+one implementation of that write instead of two.
+
+**A guarantee that had no line behind it.** `_install_copy_self` promised to
+copy "the server and everything it loads at runtime". It copied `server.py` and
+`overlay.py`, never `lib/`. Nobody had hit it because nobody installed from an
+unpacked package - the extension runs in place, and the old GPT script pointed
+at the folder where it lay. The moment the setup package became the main route,
+that omission would have written a config pointing at a copy that starts and
+dies on its first import, and the installer would have called it a success.
+
+That is the **fifth** defect of this exact shape here: *something is written,
+and nothing checks whether what it needs arrived with it.* `lib/` is now copied
+with it, replaced whole rather than merged, and `tests/test_codex_install.py`
+holds all of it - the TOML block, the foreign settings that must survive, the
+backup that is written once, the read-back, and the `lib/`.
+
+**Why a minor and not a patch.** Nothing was made stricter here. The delivered
+package can do something it could not do before: register a client it never
+touched. And its file names changed, which by the rule from 1.6.3 is a version
+of its own - two different downloads must never share a number.
+
+Not measured, and said so rather than implied: whether the Microsoft Store
+build makes `.mcpb` installation impossible in general. The redirect is
+measured, the failed install is measured, the causal link between them is not.
+
+
 ## 1.6.3
 
 **The maker has a different name.** NATHAN Development is now Desteny

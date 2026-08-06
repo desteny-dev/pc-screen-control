@@ -57,8 +57,8 @@ jobs:
       - name: Serves any MCP client over stdio, and fails politely
         run: python tests/test_any_client.py
 
-      - name: Registering with GPT does not damage an existing config
-        run: python tests/test_gpt_install.py
+      - name: Registering with Codex does not damage an existing config
+        run: python tests/test_codex_install.py
 
       - name: Keystrokes never land in the wrong window
         run: python tests/test_wrong_window.py

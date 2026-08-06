@@ -20,7 +20,7 @@ python tests/test_guard_coverage.py # nothing that changes the screen is unguard
 python tests/test_wrong_window.py  # keystrokes never land in the wrong window
 python tests/test_user_window.py   # the user's own window cannot be made to vanish
 python -m pytest -q                # tests/test_suite.py runs them all at once
-python tests/test_gpt_install.py   # the GPT config entry keeps foreign settings
+python tests/test_codex_install.py # the Codex entry keeps foreign settings
 python tests/test_refs_stale.py    # a ref survives the page moving under it
 python tests/test_encoding.py      # non-ASCII survives the protocol
 python tests/test_refs.py          # refs resolve, and invoke refuses the mouse

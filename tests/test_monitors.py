@@ -192,6 +192,27 @@ def main():
     check("both screens, size first, then position",
           zwei == "monitors|3840x2160+0+0;1080x1920+3840+0", zwei)
 
+    print("\n4b - The FIRST reading is reported even when nothing moved")
+    # Found by the check on itself. A desktop that was already correct at
+    # startup produced no change, therefore no line, therefore self_test said
+    # "not measured yet" after a block that had measured perfectly well.
+    # A check that only speaks when something is wrong is indistinguishable
+    # from a check that is not running.
+    g2, gesendet2 = bau([ZWEI])
+    check("a fresh overlay has said nothing yet", gesendet2 == [],
+          "%d lines" % len(gesendet2))
+    check("an unchanged first look still reports False",
+          wechsle(g2, gesendet2, ZWEI) is False)
+    check("...but it did say where it draws",
+          gesendet2 == ["monitors|3840x2160+0+0;1080x1920+3840+0"],
+          "; ".join(gesendet2) or "nothing")
+    wechsle(g2, gesendet2, ZWEI)
+    check("and does not repeat itself while nothing moves",
+          len(gesendet2) == 1, "%d lines" % len(gesendet2))
+    wechsle(g2, gesendet2, EIN)
+    check("a real change still speaks", len(gesendet2) == 2,
+          "; ".join(gesendet2[1:]))
+
     print("\n5 - The server describes screens the same way")
     import server
     quelle = open(os.path.join(SRC, "server.py"), encoding="utf-8").read()
